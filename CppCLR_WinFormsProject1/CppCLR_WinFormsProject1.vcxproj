@@ -139,6 +139,7 @@
     <ClInclude Include="PeakValley.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="StockReader.h" />
+    <ClInclude Include="Wave.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="AssemblyInfo.cpp" />
@@ -153,6 +154,7 @@
     </ClCompile>
     <ClCompile Include="PeakValley.cpp" />
     <ClCompile Include="StockReader.cpp" />
+    <ClCompile Include="Wave.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Image Include="app.ico" />
