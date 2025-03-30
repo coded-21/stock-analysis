@@ -20,7 +20,7 @@ public:
 
 	// Override ToString to control display text
 	virtual String^ ToString() override {
-		return String::Format("{0} -> {1}", pv2->Timestamp.ToShortDateString(), pv2->Timestamp.ToShortDateString());
+		return String::Format("{0} -> {1}", pv1->Timestamp.ToShortDateString(), pv2->Timestamp.ToShortDateString());
 	}
 };
 

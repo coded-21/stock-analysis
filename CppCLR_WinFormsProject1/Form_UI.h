@@ -363,76 +363,70 @@ namespace CppCLRWinFormsProject {
 		return filteredCandlesticks;
 	}
 
-	private: List<PeakValley^>^ generatePeaksAndValleys(List<Candlestick^>^ candles)
-	{
+	private: List<PeakValley^>^ generatePeaksAndValleys(List<Candlestick^>^ candles) {
 		List<PeakValley^>^ result = gcnew List<PeakValley^>();
 
-		if (candles == nullptr || candles->Count < 3)
+		int n = candles->Count;
+		if (candles == nullptr || n < 3)
 			return result;
 
-		array<bool>^ isPeak = gcnew array<bool>(candles->Count);
-		array<bool>^ isValley = gcnew array<bool>(candles->Count);
-
-		for (int i = 1; i < candles->Count - 1; ++i)
-		{
+		for (int i = 1; i < n - 1; ++i) {
 			double prevHigh = candles[i - 1]->High;
+			double currHigh = candles[i]->High;
 			double nextHigh = candles[i + 1]->High;
-			double currentHigh = candles[i]->High;
 
 			double prevLow = candles[i - 1]->Low;
+			double currLow = candles[i]->Low;
 			double nextLow = candles[i + 1]->Low;
-			double currentLow = candles[i]->Low;
 
-			if (currentHigh > prevHigh && currentHigh > nextHigh)
-				isPeak[i] = true;
+			bool isPeak = (currHigh > prevHigh && currHigh > nextHigh);
+			bool isValley = (currLow < prevLow && currLow < nextLow);
 
-			if (currentLow < prevLow && currentLow < nextLow)
-				isValley[i] = true;
-		}
-
-		for (int i = 1; i < candles->Count - 1; ++i)
-		{
-			if (isPeak[i])
-			{
-				int leftMargin = 0;
-				for (int j = i - 1; j >= 0; --j)
-				{
-					if (isPeak[j]) break;
-					++leftMargin;
+			if (isPeak) {
+				int marginLeft = 0;
+				for (int j = i - 1; j >= 0; --j) {
+					marginLeft++;
+					if (candles[j]->High > currHigh) break;
 				}
+				if (marginLeft == i)
+					marginLeft = i;
 
-				int rightMargin = 0;
-				for (int j = i + 1; j < candles->Count; ++j)
-				{
-					if (isPeak[j]) break;
-					++rightMargin;
+				int marginRight = 0;
+				for (int j = i + 1; j < n; ++j) {
+					marginRight++;
+					if (candles[j]->High > currHigh) break;
 				}
+				if (marginRight == n - i - 1)
+					marginRight = n - i - 1;
 
-				result->Add(gcnew PeakValley(i, true, false, leftMargin, rightMargin, candles[i]->Timestamp));
+				result->Add(gcnew PeakValley(i, true, false, marginLeft, marginRight, candles[i]->Timestamp));
 			}
 
-			if (isValley[i])
-			{
-				int leftMargin = 0;
-				for (int j = i - 1; j >= 0; --j)
-				{
-					if (isValley[j]) break;
-					++leftMargin;
+			if (isValley) {
+				int marginLeft = 0;
+				for (int j = i - 1; j >= 0; --j) {
+					marginLeft++;
+					if (candles[j]->Low < currLow) break;
 				}
+				if (marginLeft == i)
+					marginLeft = i;
 
-				int rightMargin = 0;
-				for (int j = i + 1; j < candles->Count; ++j)
-				{
-					if (isValley[j]) break;
-					++rightMargin;
+				int marginRight = 0;
+				for (int j = i + 1; j < n; ++j) {
+					marginRight++;
+					if (candles[j]->Low < currLow) break;
 				}
+				if (marginRight == n - i - 1)
+					marginRight = n - i - 1;
 
-				result->Add(gcnew PeakValley(i, false, true, leftMargin, rightMargin, candles[i]->Timestamp));
+				result->Add(gcnew PeakValley(i, false, true, marginLeft, marginRight, candles[i]->Timestamp));
 			}
 		}
 
 		return result;
 	}
+
+
 
 	private: List<PeakValley^>^ createMarginList(List<PeakValley^>^ PVList, int margin) {
 		List<PeakValley^>^ newPVList = gcnew List<PeakValley^>();
@@ -463,19 +457,29 @@ namespace CppCLRWinFormsProject {
 	private: List<Wave^>^ createWaveList(List<PeakValley^>^ pvList) {
 		List<Wave^>^ newWaveList = gcnew List<Wave^>();
 
-		for (int i = pvList->Count-1; i >= 0; i--)
-		{
-			for (int j = i; j >= 0; j--)
-			{
-				if (i == j) continue; // Don't check with itself
-				if (isValidWave(pvList[i], pvList[j]) == true) {
-					newWaveList->Add(gcnew Wave(pvList[i], pvList[j])); // Wave itself sorts if it is a downward or upward wave
+		for (int i = pvList->Count - 1; i >= 0; i--) {
+			for (int j = i - 1; j >= 0; j--) {
+				if (i == j) continue;
+
+				PeakValley^ later = pvList[i];
+				PeakValley^ earlier = pvList[j];
+
+				if (later->index < earlier->index) {
+					// swap to ensure later comes after earlier
+					PeakValley^ temp = later;
+					later = earlier;
+					earlier = temp;
+				}
+
+				if (isValidWave(later, earlier)) {
+					newWaveList->Add(gcnew Wave(later, earlier)); // Wave figures out direction
 				}
 			}
 		}
 
 		return newWaveList;
 	}
+
 
 	private: Dictionary<int, List<PeakValley^>^>^ createMarginMap(List<PeakValley^>^ allPVList) {
 		Dictionary<int, List<PeakValley^>^>^ marginMap = gcnew Dictionary<int, List<PeakValley^>^>();
@@ -546,8 +550,8 @@ namespace CppCLRWinFormsProject {
 		int endIdx = wave->pv1->index;
 		int direction = wave->direction;
 
-		startIdx = 5;    // test code
-		endIdx = 10;      // test code
+		// startIdx = 5;    // test code
+		// endIdx = 10;      // test code
 
 		double xStart = chart_CandlestickChart->Series["Series_OHLC"]->Points[startIdx]->XValue;
 		double xEnd = chart_CandlestickChart->Series["Series_OHLC"]->Points[endIdx]->XValue;
@@ -556,17 +560,6 @@ namespace CppCLRWinFormsProject {
 		
 		double yLow = direction == 0 ? filteredCandlesticks[startIdx]->Low : filteredCandlesticks[endIdx]->Low;
 		double yHigh = direction == 0 ? filteredCandlesticks[startIdx]->High : filteredCandlesticks[endIdx]->High;
-
-		// test code start
-		for (int i = startIdx; i <= endIdx; i++) {
-			DataPoint^ dp = chart_CandlestickChart->Series["Series_OHLC"]->Points[i];
-			double low = dp->YValues[3];   // Low
-			double high = dp->YValues[2];  // High
-
-			if (low < yLow) yLow = low;
-			if (high > yHigh) yHigh = high;
-		}
-		// test code end
 
 		// Create the rectangle annotation
 		RectangleAnnotation^ rect = gcnew RectangleAnnotation();
