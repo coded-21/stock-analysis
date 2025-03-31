@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include "PeakValley.h"
 
 public ref class Wave
@@ -20,7 +20,10 @@ public:
 
 	// Override ToString to control display text
 	virtual String^ ToString() override {
-		return String::Format("{0} -> {1}", pv1->Timestamp.ToShortDateString(), pv2->Timestamp.ToShortDateString());
+		auto start = pv1->Timestamp < pv2->Timestamp ? pv1 : pv2;
+		auto end = pv1->Timestamp > pv2->Timestamp ? pv1 : pv2;
+		return String::Format("{0} -> {1}", start->Timestamp.ToShortDateString(), end->Timestamp.ToShortDateString());
 	}
+
 };
 

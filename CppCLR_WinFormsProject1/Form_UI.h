@@ -546,33 +546,51 @@ namespace CppCLRWinFormsProject {
 	}
 
 	private: void drawWave(Wave^ wave) {
-		int startIdx = wave->pv2->index;
-		int endIdx = wave->pv1->index;
+		// Clear existing rectangle annotations
+		for (int i = chart_CandlestickChart->Annotations->Count - 1; i >= 0; i--) {
+			Annotation^ annotation = chart_CandlestickChart->Annotations[i];
+			if (dynamic_cast<RectangleAnnotation^>(annotation) != nullptr) {
+				chart_CandlestickChart->Annotations->RemoveAt(i);
+			}
+		}
+
+		int idx1 = wave->pv1->index;
+		int idx2 = wave->pv2->index;
+		int startIdx = Math::Min(idx1, idx2);
+		int endIdx = Math::Max(idx1, idx2);
 		int direction = wave->direction;
 
-		// startIdx = 5;    // test code
-		// endIdx = 10;      // test code
-
+		// Get X values (timestamp-based axis)
 		double xStart = chart_CandlestickChart->Series["Series_OHLC"]->Points[startIdx]->XValue;
 		double xEnd = chart_CandlestickChart->Series["Series_OHLC"]->Points[endIdx]->XValue;
 
-		List<PeakValley^>^ currentPVList = finalMarginMap[hScrollBar1->Value];
-		
-		double yLow = direction == 0 ? filteredCandlesticks[startIdx]->Low : filteredCandlesticks[endIdx]->Low;
-		double yHigh = direction == 0 ? filteredCandlesticks[startIdx]->High : filteredCandlesticks[endIdx]->High;
+		// Get Y values
+		double yStart = direction == 0 ? filteredCandlesticks[startIdx]->Low : filteredCandlesticks[startIdx]->High;
+		double yEnd = direction == 0 ? filteredCandlesticks[endIdx]->High : filteredCandlesticks[endIdx]->Low;
 
-		// Create the rectangle annotation
+		// Determine rectangle bounds
+		double top = Math::Max(yStart, yEnd);
+		double bottom = Math::Min(yStart, yEnd);
+
+		double x = Math::Min(xStart, xEnd);
+		double width = xEnd - xStart;
+		double height = top - bottom;  // Correct height (no duplication!)
+
+		// Create and configure rectangle annotation
 		RectangleAnnotation^ rect = gcnew RectangleAnnotation();
-		rect->AxisX = chart_CandlestickChart->ChartAreas[0]->AxisX;
-		rect->AxisY = chart_CandlestickChart->ChartAreas[0]->AxisY;
+		rect->AnchorDataPoint = chart_CandlestickChart->Series["Series_OHLC"]->Points[0];
+  		rect->IsSizeAlwaysRelative = false;
+		/*rect->ClipToChartArea = "Chart_OHLC";
+		rect->AxisX = chart_CandlestickChart->ChartAreas["Chart_OHLC"]->AxisX;
+		rect->AxisY = chart_CandlestickChart->ChartAreas["Chart_OHLC"]->AxisY;*/
 
-		rect->X = xStart;
-		rect->Y = yHigh; // top
-		rect->Width = xEnd - xStart;
-		rect->Height = yHigh - yLow;
+		rect->X = x;
+		rect->Y = top; // Set to the top of the rectangle
+		rect->Width = width;
+		rect->Height = -(top - bottom);
 
 		rect->LineColor = direction == 0 ? Color::Green : Color::Red;
-		rect->BackColor = direction == 0 ? Color::FromArgb(60, Color::Green) : Color::FromArgb(60, Color::Red); // semi-transparent fill
+		rect->BackColor = direction == 0 ? Color::FromArgb(60, Color::Green) : Color::FromArgb(60, Color::Red);
 		rect->LineDashStyle = ChartDashStyle::Dash;
 
 		chart_CandlestickChart->Annotations->Add(rect);
