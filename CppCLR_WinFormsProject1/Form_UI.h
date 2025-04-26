@@ -39,6 +39,13 @@ namespace CppCLRWinFormsProject {
 	private: System::Windows::Forms::TextBox^ textBox_confirmations;
 
 	private: System::Windows::Forms::Label^ label_confirmations;
+	private: System::Windows::Forms::Button^ button_StepUp;
+	private: System::Windows::Forms::Button^ button_StepDown;
+
+
+	private: System::Windows::Forms::Button^ button_SimulateStartStop;
+
+	private: System::Windows::Forms::Timer^ simulationTimer;
 
 		   static array<String^>^ fibLevelStrings = gcnew array<String^>{ "0.0%", "23.6%", "38.2%", "50.0%", "61.8%", "76.4%", "100.0%" };
 
@@ -156,13 +163,104 @@ namespace CppCLRWinFormsProject {
 		}
 	}
 
-		   // *** NEW: Helper to remove annotation by name safely ***
-		   void RemoveAnnotationByName(String^ name) {
-			   Annotation^ ann = chart_CandlestickChart->Annotations->FindByName(name);
-			   if (ann != nullptr) {
-				   chart_CandlestickChart->Annotations->Remove(ann);
-			   }
-		   }
+	// *** NEW: Helper to remove annotation by name safely ***
+	void RemoveAnnotationByName(String^ name) {
+		Annotation^ ann = chart_CandlestickChart->Annotations->FindByName(name);
+		if (ann != nullptr) {
+			chart_CandlestickChart->Annotations->Remove(ann);
+		}
+	}
+
+	void ClearRetracementVisuals() {
+		if (selectionRectAnnotation != nullptr) selectionRectAnnotation->Visible = false;
+		if (diagonalLineAnnotation != nullptr) diagonalLineAnnotation->Visible = false;
+		if (fibLineAnnotations != nullptr) {
+			for each (HorizontalLineAnnotation ^ line in fibLineAnnotations) if (line != nullptr) line->Visible = false;
+		}
+		if (fibLabelAnnotations != nullptr) {
+			for each (TextAnnotation ^ label in fibLabelAnnotations) if (label != nullptr) label->Visible = false;
+		}
+		// Clear confirmation markers
+		if (chart_CandlestickChart->Series->IndexOf("Confirmations") != -1) {
+			chart_CandlestickChart->Series["Confirmations"]->Points->Clear();
+		}
+	}
+
+	// *** NEW: Calculates Confirmations and Plots Markers ***
+	int CalculateAndShowConfirmations(double minXVal, double maxXVal, double minYVal, double maxYVal)
+	{
+		int confirmationCount = 0;
+		// Clear previous markers
+		if (chart_CandlestickChart->Series->IndexOf("Confirmations") != -1) {
+			chart_CandlestickChart->Series["Confirmations"]->Points->Clear();
+		}
+		else {
+			return 0; // Cannot plot if series doesn't exist
+		}
+
+		if (filteredCandlesticks == nullptr || filteredCandlesticks->Count == 0 ||
+			fibLineAnnotations == nullptr || chart_CandlestickChart->ChartAreas->Count == 0)
+		{
+			return 0; // Cannot calculate
+		}
+
+		ChartArea^ chartArea = chart_CandlestickChart->ChartAreas[0];
+		Axis^ axisY = chartArea->AxisY;
+
+		// Get visible Fibonacci Y-Axis values
+		List<double>^ fibYValues = gcnew List<double>();
+		for each (HorizontalLineAnnotation ^ line in fibLineAnnotations) {
+			if (line != nullptr && line->Visible) {
+				fibYValues->Add(line->Y);
+			}
+		}
+		if (fibYValues->Count == 0) return 0; // No levels visible
+
+		double tolerance = 0.0; // Tolerance for touching
+		if (axisY->Maximum > axisY->Minimum) {
+			tolerance = (axisY->Maximum - axisY->Minimum) * 0.002; // 0.2%
+		}
+		if (tolerance <= 0) tolerance = 0.05; // Fallback
+
+		// Iterate through visible candlesticks
+		for each (Candlestick ^ candle in filteredCandlesticks) {
+			if (candle == nullptr) continue;
+
+			double candleXVal = candle->Timestamp.ToOADate();
+			// Check if candle's X value is within the selection rectangle's X range
+			if (candleXVal >= minXVal && candleXVal <= maxXVal) {
+				// Check if any part of the candle touches any Fib line within the Y range
+				for each (double fibY in fibYValues) {
+					// Ensure Fib level itself is within the selection's Y bounds
+					if (fibY >= minYVal && fibY <= maxYVal) {
+						bool touched = false;
+						double touchY = Double::NaN; // Y coordinate where touch occurs
+
+						// Check High, Low, Open, Close against the fib level within tolerance
+						if (Math::Abs(candle->High - fibY) <= tolerance) { touched = true; touchY = candle->High; }
+						else if (Math::Abs(candle->Low - fibY) <= tolerance) { touched = true; touchY = candle->Low; }
+						else if (Math::Abs(candle->Open - fibY) <= tolerance) { touched = true; touchY = candle->Open; }
+						else if (Math::Abs(candle->Close - fibY) <= tolerance) { touched = true; touchY = candle->Close; }
+						// Check if fib level falls BETWEEN High and Low (body cross)
+						else if (candle->Low < fibY && candle->High > fibY) { touched = true; touchY = fibY; } // Mark at the fib level itself
+
+						if (touched) {
+							confirmationCount++;
+							// Add marker to the "Confirmations" series
+							chart_CandlestickChart->Series["Confirmations"]->Points->AddXY(candleXVal, touchY);
+							break; // Count only one confirmation per candle, move to next candle
+						}
+					}
+				} // end fibY loop
+			} // end X range check
+		} // end candle loop
+
+		// Display the count (optional)
+		// MessageBox::Show("Fibonacci Confirmations: " + confirmationCount, "Confirmation Count", MessageBoxButtons::OK, MessageBoxIcon::Information);
+
+		return confirmationCount;
+	}
+
 	private: System::Windows::Forms::OpenFileDialog^ openFileDialog_LoadTicker;
 	private: System::Windows::Forms::Button^ button_LoadTicker;
 
@@ -179,6 +277,7 @@ namespace CppCLRWinFormsProject {
 	private: System::Windows::Forms::Label^ label_upwardComboBox;
 	private: System::Windows::Forms::Label^ label_downwardComboBox;
 	private: System::Windows::Forms::Button^ button_updateButton;
+private: System::ComponentModel::IContainer^ components;
 
 
 
@@ -191,7 +290,7 @@ namespace CppCLRWinFormsProject {
 		/// <summary>
 		/// Required designer variable.
 		/// </summary>
-		System::ComponentModel::Container ^components;
+
 
 #pragma region Windows Form Designer generated code
 		/// <summary>
@@ -200,13 +299,15 @@ namespace CppCLRWinFormsProject {
 		/// </summary>
 		void InitializeComponent(void)
 		{
+			this->components = (gcnew System::ComponentModel::Container());
 			System::Windows::Forms::DataVisualization::Charting::ChartArea^ chartArea3 = (gcnew System::Windows::Forms::DataVisualization::Charting::ChartArea());
 			System::Windows::Forms::DataVisualization::Charting::ChartArea^ chartArea4 = (gcnew System::Windows::Forms::DataVisualization::Charting::ChartArea());
 			System::Windows::Forms::DataVisualization::Charting::Legend^ legend2 = (gcnew System::Windows::Forms::DataVisualization::Charting::Legend());
-			System::Windows::Forms::DataVisualization::Charting::Series^ series5 = (gcnew System::Windows::Forms::DataVisualization::Charting::Series());
 			System::Windows::Forms::DataVisualization::Charting::Series^ series6 = (gcnew System::Windows::Forms::DataVisualization::Charting::Series());
 			System::Windows::Forms::DataVisualization::Charting::Series^ series7 = (gcnew System::Windows::Forms::DataVisualization::Charting::Series());
 			System::Windows::Forms::DataVisualization::Charting::Series^ series8 = (gcnew System::Windows::Forms::DataVisualization::Charting::Series());
+			System::Windows::Forms::DataVisualization::Charting::Series^ series9 = (gcnew System::Windows::Forms::DataVisualization::Charting::Series());
+			System::Windows::Forms::DataVisualization::Charting::Series^ series10 = (gcnew System::Windows::Forms::DataVisualization::Charting::Series());
 			this->openFileDialog_LoadTicker = (gcnew System::Windows::Forms::OpenFileDialog());
 			this->button_LoadTicker = (gcnew System::Windows::Forms::Button());
 			this->dateTimePicker_startDate = (gcnew System::Windows::Forms::DateTimePicker());
@@ -222,6 +323,10 @@ namespace CppCLRWinFormsProject {
 			this->button_updateButton = (gcnew System::Windows::Forms::Button());
 			this->textBox_confirmations = (gcnew System::Windows::Forms::TextBox());
 			this->label_confirmations = (gcnew System::Windows::Forms::Label());
+			this->button_StepUp = (gcnew System::Windows::Forms::Button());
+			this->button_StepDown = (gcnew System::Windows::Forms::Button());
+			this->button_SimulateStartStop = (gcnew System::Windows::Forms::Button());
+			this->simulationTimer = (gcnew System::Windows::Forms::Timer(this->components));
 			(cli::safe_cast<System::ComponentModel::ISupportInitialize^>(this->chart_CandlestickChart))->BeginInit();
 			this->SuspendLayout();
 			// 
@@ -290,40 +395,50 @@ namespace CppCLRWinFormsProject {
 			this->chart_CandlestickChart->Legends->Add(legend2);
 			this->chart_CandlestickChart->Location = System::Drawing::Point(0, 0);
 			this->chart_CandlestickChart->Name = L"chart_CandlestickChart";
-			series5->ChartArea = L"Chart_OHLC";
-			series5->ChartType = System::Windows::Forms::DataVisualization::Charting::SeriesChartType::Candlestick;
-			series5->CustomProperties = L"PriceDownColor=Red, PriceUpColor=ForestGreen";
-			series5->Legend = L"Legend1";
-			series5->Name = L"Series_OHLC";
-			series5->XValueMember = L"Timestamp";
-			series5->XValueType = System::Windows::Forms::DataVisualization::Charting::ChartValueType::DateTime;
-			series5->YValueMembers = L"High,Low,Open,Close";
-			series5->YValuesPerPoint = 4;
-			series6->ChartArea = L"Chart_Volume";
-			series6->IsXValueIndexed = true;
+			series6->ChartArea = L"Chart_OHLC";
+			series6->ChartType = System::Windows::Forms::DataVisualization::Charting::SeriesChartType::Candlestick;
+			series6->CustomProperties = L"PriceDownColor=Red, PriceUpColor=ForestGreen";
 			series6->Legend = L"Legend1";
-			series6->Name = L"Series_Volume";
+			series6->Name = L"Series_OHLC";
 			series6->XValueMember = L"Timestamp";
-			series6->XValueType = System::Windows::Forms::DataVisualization::Charting::ChartValueType::Date;
-			series6->YValueMembers = L"Volume";
-			series7->ChartArea = L"Chart_OHLC";
-			series7->ChartType = System::Windows::Forms::DataVisualization::Charting::SeriesChartType::Point;
-			series7->Color = System::Drawing::Color::Lime;
+			series6->XValueType = System::Windows::Forms::DataVisualization::Charting::ChartValueType::DateTime;
+			series6->YValueMembers = L"High,Low,Open,Close";
+			series6->YValuesPerPoint = 4;
+			series7->ChartArea = L"Chart_Volume";
+			series7->IsXValueIndexed = true;
 			series7->Legend = L"Legend1";
-			series7->MarkerSize = 8;
-			series7->MarkerStyle = System::Windows::Forms::DataVisualization::Charting::MarkerStyle::Diamond;
-			series7->Name = L"Peaks";
+			series7->Name = L"Series_Volume";
+			series7->XValueMember = L"Timestamp";
+			series7->XValueType = System::Windows::Forms::DataVisualization::Charting::ChartValueType::Date;
+			series7->YValueMembers = L"Volume";
 			series8->ChartArea = L"Chart_OHLC";
 			series8->ChartType = System::Windows::Forms::DataVisualization::Charting::SeriesChartType::Point;
-			series8->Color = System::Drawing::Color::Red;
+			series8->Color = System::Drawing::Color::Lime;
+			series8->Enabled = false;
 			series8->Legend = L"Legend1";
 			series8->MarkerSize = 8;
 			series8->MarkerStyle = System::Windows::Forms::DataVisualization::Charting::MarkerStyle::Diamond;
-			series8->Name = L"Valleys";
-			this->chart_CandlestickChart->Series->Add(series5);
+			series8->Name = L"Peaks";
+			series9->ChartArea = L"Chart_OHLC";
+			series9->ChartType = System::Windows::Forms::DataVisualization::Charting::SeriesChartType::Point;
+			series9->Color = System::Drawing::Color::Red;
+			series9->Enabled = false;
+			series9->Legend = L"Legend1";
+			series9->MarkerSize = 8;
+			series9->MarkerStyle = System::Windows::Forms::DataVisualization::Charting::MarkerStyle::Diamond;
+			series9->Name = L"Valleys";
+			series10->ChartArea = L"Chart_OHLC";
+			series10->ChartType = System::Windows::Forms::DataVisualization::Charting::SeriesChartType::Point;
+			series10->Legend = L"Legend1";
+			series10->MarkerColor = System::Drawing::Color::Fuchsia;
+			series10->MarkerSize = 6;
+			series10->MarkerStyle = System::Windows::Forms::DataVisualization::Charting::MarkerStyle::Circle;
+			series10->Name = L"Confirmations";
 			this->chart_CandlestickChart->Series->Add(series6);
 			this->chart_CandlestickChart->Series->Add(series7);
 			this->chart_CandlestickChart->Series->Add(series8);
+			this->chart_CandlestickChart->Series->Add(series9);
+			this->chart_CandlestickChart->Series->Add(series10);
 			this->chart_CandlestickChart->Size = System::Drawing::Size(747, 536);
 			this->chart_CandlestickChart->TabIndex = 7;
 			this->chart_CandlestickChart->Text = L"chart1";
@@ -355,7 +470,7 @@ namespace CppCLRWinFormsProject {
 			// comboBox_downwardWaves
 			// 
 			this->comboBox_downwardWaves->FormattingEnabled = true;
-			this->comboBox_downwardWaves->Location = System::Drawing::Point(787, 354);
+			this->comboBox_downwardWaves->Location = System::Drawing::Point(787, 283);
 			this->comboBox_downwardWaves->Name = L"comboBox_downwardWaves";
 			this->comboBox_downwardWaves->Size = System::Drawing::Size(244, 21);
 			this->comboBox_downwardWaves->TabIndex = 10;
@@ -373,7 +488,7 @@ namespace CppCLRWinFormsProject {
 			// label_downwardComboBox
 			// 
 			this->label_downwardComboBox->AutoSize = true;
-			this->label_downwardComboBox->Location = System::Drawing::Point(787, 326);
+			this->label_downwardComboBox->Location = System::Drawing::Point(787, 255);
 			this->label_downwardComboBox->Name = L"label_downwardComboBox";
 			this->label_downwardComboBox->Size = System::Drawing::Size(95, 13);
 			this->label_downwardComboBox->TabIndex = 12;
@@ -405,11 +520,43 @@ namespace CppCLRWinFormsProject {
 			this->label_confirmations->TabIndex = 15;
 			this->label_confirmations->Text = L"Confirmations";
 			// 
+			// button_StepUp
+			// 
+			this->button_StepUp->Enabled = false;
+			this->button_StepUp->Location = System::Drawing::Point(787, 477);
+			this->button_StepUp->Name = L"button_StepUp";
+			this->button_StepUp->Size = System::Drawing::Size(49, 47);
+			this->button_StepUp->TabIndex = 16;
+			this->button_StepUp->Text = L"+";
+			this->button_StepUp->UseVisualStyleBackColor = true;
+			// 
+			// button_StepDown
+			// 
+			this->button_StepDown->Enabled = false;
+			this->button_StepDown->Location = System::Drawing::Point(854, 477);
+			this->button_StepDown->Name = L"button_StepDown";
+			this->button_StepDown->Size = System::Drawing::Size(49, 47);
+			this->button_StepDown->TabIndex = 17;
+			this->button_StepDown->Text = L"-";
+			this->button_StepDown->UseVisualStyleBackColor = true;
+			// 
+			// button_SimulateStartStop
+			// 
+			this->button_SimulateStartStop->Location = System::Drawing::Point(924, 477);
+			this->button_SimulateStartStop->Name = L"button_SimulateStartStop";
+			this->button_SimulateStartStop->Size = System::Drawing::Size(49, 47);
+			this->button_SimulateStartStop->TabIndex = 18;
+			this->button_SimulateStartStop->Text = L"S/S";
+			this->button_SimulateStartStop->UseVisualStyleBackColor = true;
+			// 
 			// Form_UI
 			// 
 			this->AutoScaleDimensions = System::Drawing::SizeF(6, 13);
 			this->AutoScaleMode = System::Windows::Forms::AutoScaleMode::Font;
 			this->ClientSize = System::Drawing::Size(1043, 656);
+			this->Controls->Add(this->button_SimulateStartStop);
+			this->Controls->Add(this->button_StepDown);
+			this->Controls->Add(this->button_StepUp);
 			this->Controls->Add(this->label_confirmations);
 			this->Controls->Add(this->textBox_confirmations);
 			this->Controls->Add(this->button_updateButton);
@@ -677,6 +824,9 @@ namespace CppCLRWinFormsProject {
 		}
 	}
 
+	/*
+	** Obsolete Function ** 
+	
 	// The actual function that uses RectangleAnnotation to draw the wave
 	private: void drawWave(Wave^ wave) {
 		// Clear existing rectangle annotations
@@ -713,9 +863,9 @@ namespace CppCLRWinFormsProject {
 		RectangleAnnotation^ rect = gcnew RectangleAnnotation();
 		rect->AnchorDataPoint = chart_CandlestickChart->Series["Series_OHLC"]->Points[0];
   		rect->IsSizeAlwaysRelative = false;
-		/*rect->ClipToChartArea = "Chart_OHLC";
-		rect->AxisX = chart_CandlestickChart->ChartAreas["Chart_OHLC"]->AxisX;
-		rect->AxisY = chart_CandlestickChart->ChartAreas["Chart_OHLC"]->AxisY;*/
+		// rect->ClipToChartArea = "Chart_OHLC";
+		// rect->AxisX = chart_CandlestickChart->ChartAreas["Chart_OHLC"]->AxisX;
+		// rect->AxisY = chart_CandlestickChart->ChartAreas["Chart_OHLC"]->AxisY;
 
 		rect->X = x;
 		rect->Y = top; // Set to the top of the rectangle
@@ -728,21 +878,22 @@ namespace CppCLRWinFormsProject {
 
 		chart_CandlestickChart->Annotations->Add(rect);
 	}
+	*/
+	
+	//// Take a comboBoxSelection or wave, and for each wave, draw a rectangle annotation from the first end to
+	//// the last end point. Downward waves are colored red and upward waves are colored green.
+	//private: void updateWaveAnnotations() {
+	//	Wave^ upwardWave = dynamic_cast<Wave^>(comboBox_upwardWaves->SelectedItem);
+	//	Wave^ downwardWave = dynamic_cast<Wave^>(comboBox_downwardWaves->SelectedItem);
 
-	// Take a comboBoxSelection or wave, and for each wave, draw a rectangle annotation from the first end to
-	// the last end point. Downward waves are colored red and upward waves are colored green.
-	private: void updateWaveAnnotations() {
-		Wave^ upwardWave = dynamic_cast<Wave^>(comboBox_upwardWaves->SelectedItem);
-		Wave^ downwardWave = dynamic_cast<Wave^>(comboBox_downwardWaves->SelectedItem);
+	//	if (upwardWave != nullptr) {
+	//		drawWave(upwardWave);
+	//	}
 
-		if (upwardWave != nullptr) {
-			drawWave(upwardWave);
-		}
-
-		if (downwardWave != nullptr) {
-			drawWave(downwardWave);
-		}
-	}
+	//	if (downwardWave != nullptr) {
+	//		drawWave(downwardWave);
+	//	}
+	//}
 
 	// store the filename for reuse later with Update button
 	private: String^ currentFileName;
@@ -755,7 +906,52 @@ namespace CppCLRWinFormsProject {
 		display(fileName);
 		return candlesticks;
 	}
+	// *** Handles wave selection from either ComboBox ***
+	void HandleWaveSelection(Wave^ selectedWave) {
+		ClearRetracementVisuals(); // Clear any manual selection first
 
+		if (selectedWave == nullptr || selectedWave->pv1 == nullptr || selectedWave->pv2 == nullptr ||
+			chart_CandlestickChart->Series["Series_OHLC"] == nullptr || filteredCandlesticks == nullptr) {
+			return; // Cannot process if wave or data is invalid
+		}
+
+		int idx1 = selectedWave->pv1->index;
+		int idx2 = selectedWave->pv2->index;
+
+		// Ensure indices are valid for the OHLC series points
+		int pointCount = chart_CandlestickChart->Series["Series_OHLC"]->Points->Count;
+		if (idx1 < 0 || idx1 >= pointCount || idx2 < 0 || idx2 >= pointCount) return;
+
+		// Ensure indices are valid for the filteredCandlesticks list (used for Y values)
+		int filteredCount = filteredCandlesticks->Count;
+		if (idx1 >= filteredCount || idx2 >= filteredCount) return; // Index mismatch
+
+
+		// Get the specific start/end points for the diagonal line
+		DataPoint^ dpStart = chart_CandlestickChart->Series["Series_OHLC"]->Points[idx1];
+		DataPoint^ dpEnd = chart_CandlestickChart->Series["Series_OHLC"]->Points[idx2];
+
+		// Get the corresponding Y values from the filtered candlesticks for the wave definition
+		// Note: We need the HIGH/LOW values corresponding to the PV points for Fib range
+		double yVal1 = selectedWave->pv1->IsPeak ? filteredCandlesticks[idx1]->High : filteredCandlesticks[idx1]->Low;
+		double yVal2 = selectedWave->pv2->IsPeak ? filteredCandlesticks[idx2]->High : filteredCandlesticks[idx2]->Low;
+
+		// Draw the retracement using the X values from datapoints and Y values from wave definition
+		DrawFibRetracement(dpStart->XValue, yVal1, dpEnd->XValue, yVal2);
+
+		// Calculate bounds for confirmation check
+		double minXVal = Math::Min(dpStart->XValue, dpEnd->XValue);
+		double maxXVal = Math::Max(dpStart->XValue, dpEnd->XValue);
+		double minYVal = Math::Min(yVal1, yVal2); // Use the actual Y values defining the wave range
+		double maxYVal = Math::Max(yVal1, yVal2);
+
+		// Calculate and show confirmations for the selected wave
+		int confirmationCount = CalculateAndShowConfirmations(minXVal, maxXVal, minYVal, maxYVal);
+
+		// Display count (optional, maybe update a label instead of MessageBox for combo selection)
+		this->textBox_confirmations->Text = confirmationCount.ToString();
+		// MessageBox::Show("Confirmations for selected wave: " + confirmationCount, ...);
+	}
 
 	// The display function takes care of setting up the info and displaying everything on the chart
 	private: List<Candlestick^>^ display(String^ fileName) {
@@ -767,6 +963,25 @@ namespace CppCLRWinFormsProject {
 
 		// Filtering the candlesticks based on the date we want to display
 		this->filteredCandlesticks = filterCandlesticksByDate(candlesticks, dateTimePicker_startDate->Value, dateTimePicker_endDate->Value);
+
+		// --- Clear previous data markers and WAVE annotations ONLY ---
+		chart_CandlestickChart->Series["Peaks"]->Points->Clear(); //
+		chart_CandlestickChart->Series["Valleys"]->Points->Clear(); //
+		// Clear wave annotations explicitly if needed, or rely on selection logic
+		for (int i = chart_CandlestickChart->Annotations->Count - 1; i >= 0; i--) { //
+			Annotation^ annotation = chart_CandlestickChart->Annotations[i]; //
+			if (annotation->Name != nullptr && annotation->Name->StartsWith("WaveAnnotation_")) { //
+				chart_CandlestickChart->Annotations->RemoveAt(i); //
+			}
+		}
+		// Also clear any existing retracement/selection visuals
+		ClearRetracementVisuals();
+
+		// Clear combo boxes before potentially repopulating
+		comboBox_upwardWaves->Items->Clear();
+		comboBox_downwardWaves->Items->Clear();
+		comboBox_upwardWaves->Text = "";
+		comboBox_downwardWaves->Text = "";
 
 		// ** NEW ** Code for calculating peaks and valleys
 		// create a peak valley class, iterate through the list of filtered candlesticks, and return a list of peaks
@@ -796,7 +1011,7 @@ namespace CppCLRWinFormsProject {
 		// Adding annotations
 		updatePeakValleyAnnotations(hScrollBar1->Value);
 		updateComboBoxes(hScrollBar1->Value);
-		updateWaveAnnotations();
+		// updateWaveAnnotations(); *** Obsolete Function ***
 
 
 		return (filteredCandlesticks);
@@ -809,103 +1024,149 @@ private: System::Void Form_UI_Load(System::Object^ sender, System::EventArgs^ e)
 
 	openFileDialog_LoadTicker->ShowDialog();
 }
+
 private: System::Void hScrollBar1_Scroll(System::Object^ sender, System::Windows::Forms::ScrollEventArgs^ e) {
-	// Clear old annotations
-	chart_CandlestickChart->Annotations->Clear();
+	// *** NEW LOGIC ***
 
-	// Also clear old peaks/valleys markers!
-	chart_CandlestickChart->Series["Peaks"]->Points->Clear();
-	chart_CandlestickChart->Series["Valleys"]->Points->Clear();
+	// 1. Clear previous retracement visuals (rectangle, lines, fibs, confirmations)
+	ClearRetracementVisuals();
 
-	// Update markers for the new margin value
+	// 2. Clear old peaks/valleys markers (done within updatePeakValleyAnnotations now)
+	// chart_CandlestickChart->Series["Peaks"]->Points->Clear(); // No longer needed here
+	// chart_CandlestickChart->Series["Valleys"]->Points->Clear(); // No longer needed here
+
+	// 3. Update peak/valley markers for the new margin value (this clears old ones too)
 	updatePeakValleyAnnotations(hScrollBar1->Value);
 
+	// 4. Update ComboBox contents based on the new margin
 	updateComboBoxes(hScrollBar1->Value);
 
-	// Redraw the chart
-	chart_CandlestickChart->Invalidate();
-	chart_CandlestickChart->Update();
+	// 5. Do NOT automatically draw a wave from the combo box here.
+	//    The user needs to click the combo box again if they want to see a wave
+	//    for the new margin level.
+
+	// 6. Remove unnecessary Invalidate/Update calls
+	// chart_CandlestickChart->Invalidate(); // Generally not needed
+	// chart_CandlestickChart->Update();     // Generally not needed
 }
+
+// Combo Box Event Handlers
+
 private: System::Void comboBox_upwardWaves_SelectedIndexChanged(System::Object^ sender, System::EventArgs^ e) {
-	updateWaveAnnotations();
+	HandleWaveSelection(dynamic_cast<Wave^>(comboBox_upwardWaves->SelectedItem));
+	comboBox_downwardWaves->SelectedIndex = -1; // Clear other selection
 }
 private: System::Void comboBox_downwardWaves_SelectedIndexChanged(System::Object^ sender, System::EventArgs^ e) {
-	updateWaveAnnotations();
+	HandleWaveSelection(dynamic_cast<Wave^>(comboBox_downwardWaves->SelectedItem));
+	comboBox_upwardWaves->SelectedIndex = -1; // Clear other selection
 }
-private: System::Void button_updateButton_Click(System::Object^ sender, System::EventArgs^ e) {
-	try {
-		chart_CandlestickChart->Series["Peaks"]->Points->Clear();
-		chart_CandlestickChart->Series["Valleys"]->Points->Clear();
-		chart_CandlestickChart->Annotations->Clear();
 
+
+private: System::Void button_updateButton_Click(System::Object^ sender, System::EventArgs^ e) {
+	if (String::IsNullOrEmpty(filePath)) {
+		MessageBox::Show("Please load a ticker file first.", "No File Loaded", MessageBoxButtons::OK, MessageBoxIcon::Information);
+		return;
+	}
+
+	try {
+		// *** NEW LOGIC ***
+
+		// 1. Clear previous retracement visuals (rectangle, lines, fibs, confirmations)
+		ClearRetracementVisuals();
+
+		// 2. Clear peak/valley markers (will be redrawn by display->updatePeakValleyAnnotations)
+		if (chart_CandlestickChart->Series->IndexOf("Peaks") != -1)
+			chart_CandlestickChart->Series["Peaks"]->Points->Clear();
+		if (chart_CandlestickChart->Series->IndexOf("Valleys") != -1)
+			chart_CandlestickChart->Series["Valleys"]->Points->Clear();
+
+		// 3. DO NOT clear all annotations here:
+		// chart_CandlestickChart->Annotations->Clear(); // REMOVED
+
+		// --- Proceed with re-filtering and re-displaying ---
+
+		// Ensure fresh read of original data
+		candlesticks = StockReader::ReadFromCSV(filePath);
+
+		// Call display, which handles filtering, calcs, markers, combo boxes, binding etc.
+		display(System::IO::Path::GetFileName(filePath));
+
+		// The display function now handles the logic below, so it can be removed from here:
+		/*
 		this->filteredCandlesticks = filterCandlesticksByDate(candlesticks,
 			dateTimePicker_startDate->Value,
 			dateTimePicker_endDate->Value);
 
-		if (filteredCandlesticks->Count < 3) {
+		if (filteredCandlesticks == nullptr || filteredCandlesticks->Count < 3) { // Added null check
 			MessageBox::Show("Please select a wider range.",
 				"Not enough points", MessageBoxButtons::OK, MessageBoxIcon::Warning);
+			// Ensure chart is cleared if not enough points
+			if(chart_CandlestickChart->Series->IndexOf("Series_OHLC") != -1)
+				 chart_CandlestickChart->Series["Series_OHLC"]->Points->Clear();
+			// Clear maps
+			finalMarginMap = gcnew Dictionary<int, List<PeakValley^>^>();
+			finalWaveMap = gcnew Dictionary<int, List<Wave^>^>();
 			return;
 		}
 
 		List<PeakValley^>^ allPeaksAndValleys = generatePeaksAndValleys(filteredCandlesticks);
-
 		this->finalMarginMap = createMarginMap(allPeaksAndValleys);
 		this->finalWaveMap = createWaveMap();
 
-
 		BindingList<Candlestick^>^ bindingList = gcnew BindingList<Candlestick^>(filteredCandlesticks);
-
 		normalizeChart(filteredCandlesticks);
-
 		chart_CandlestickChart->DataSource = bindingList;
 		chart_CandlestickChart->DataBind();
 
-		if (hScrollBar1->Value > finalMarginMap->Count) {
-			hScrollBar1->Value = Math::Min(hScrollBar1->Value, finalMarginMap->Count);
+		// Adjust scrollbar if needed (might be better placed after map creation checks)
+		if (finalMarginMap != nullptr && hScrollBar1->Value > finalMarginMap->Count && finalMarginMap->Count > 0) {
+			hScrollBar1->Value = finalMarginMap->Count; // Adjust to max valid margin
+		} else if (finalMarginMap == nullptr || finalMarginMap->Count == 0) {
+			hScrollBar1->Value = hScrollBar1->Minimum; // Reset if no margins
 		}
 
-		if (finalMarginMap->ContainsKey(hScrollBar1->Value)) {
-			updatePeakValleyAnnotations(hScrollBar1->Value);
-		}
 
-		// Update combo boxes
-		if (finalWaveMap->ContainsKey(hScrollBar1->Value)) {
-			updateComboBoxes(hScrollBar1->Value);
+		// Update markers and combo boxes (use the adjusted scrollbar value)
+		int currentMargin = hScrollBar1->Value;
+		if (finalMarginMap != nullptr && finalMarginMap->ContainsKey(currentMargin)) {
+			updatePeakValleyAnnotations(currentMargin);
 		}
+		if (finalWaveMap != nullptr && finalWaveMap->ContainsKey(currentMargin)) {
+			updateComboBoxes(currentMargin);
+		}
+		*/
 
-		// Clear combo boxes
+		// Ensure combo boxes are cleared after update (display might repopulate, but selection should be cleared)
 		comboBox_upwardWaves->SelectedIndex = -1;
 		comboBox_downwardWaves->SelectedIndex = -1;
+		comboBox_upwardWaves->Text = ""; // Also clear text
+		comboBox_downwardWaves->Text = "";
+
+
 	}
-	catch (System::IndexOutOfRangeException^ ex) {
-		MessageBox::Show("Error: " + ex->Message + "\nTry a different date range.",
-			"Out of Range", MessageBoxButtons::OK, MessageBoxIcon::Error);
+	catch (System::IO::FileNotFoundException^ ex) { // Specific exception
+		MessageBox::Show("Error loading file: " + ex->Message, "File Not Found", MessageBoxButtons::OK, MessageBoxIcon::Error);
 	}
-	catch (System::Exception^ ex) {
-		MessageBox::Show("error: " + ex->Message,
+	catch (System::IndexOutOfRangeException^ ex) { // Changed order
+		MessageBox::Show("Error processing data: " + ex->Message + "\nCheck date range or file format.",
+			"Processing Error", MessageBoxButtons::OK, MessageBoxIcon::Error);
+	}
+	catch (System::Exception^ ex) { // General exception last
+		MessageBox::Show("An error occurred: " + ex->Message,
 			"Error", MessageBoxButtons::OK, MessageBoxIcon::Error);
 	}
 }
 
-private: void UpdateSelectionVisuals()
+
+
+void DrawFibRetracement(double startXVal, double startYVal, double endXVal, double endYVal)
 {
-	// Ensure necessary objects exist (Removed IsSelecting check here)
-	if (rubberBandSelection == nullptr ||
-		selectionRectAnnotation == nullptr || diagonalLineAnnotation == nullptr ||
+	// Ensure necessary objects exist
+	if (selectionRectAnnotation == nullptr || diagonalLineAnnotation == nullptr ||
 		fibLineAnnotations == nullptr || fibLabelAnnotations == nullptr ||
 		chart_CandlestickChart->ChartAreas->Count == 0)
 	{
-		// Cannot proceed if essential objects are missing
-		// Ensure everything is hidden if we exit early
-		if (selectionRectAnnotation != nullptr) selectionRectAnnotation->Visible = false;
-		if (diagonalLineAnnotation != nullptr) diagonalLineAnnotation->Visible = false;
-		if (fibLineAnnotations != nullptr) {
-			for each (HorizontalLineAnnotation ^ line in fibLineAnnotations) if (line != nullptr) line->Visible = false;
-		}
-		if (fibLabelAnnotations != nullptr) {
-			for each (TextAnnotation ^ label in fibLabelAnnotations) if (label != nullptr) label->Visible = false;
-		}
+		ClearRetracementVisuals(); // Hide everything if objects are missing
 		return;
 	}
 
@@ -914,93 +1175,63 @@ private: void UpdateSelectionVisuals()
 	Axis^ axisX = chartArea->AxisX;
 	Axis^ axisY = chartArea->AxisY;
 
-	// Get pixel coordinates from rubber band selection
-	Point startPt = rubberBandSelection->StartPoint;
-	Point endPt = rubberBandSelection->EndPoint;
-
-	// If start and end points are the same, nothing to draw yet. Hide and return.
-	if (startPt.Equals(endPt)) {
-		selectionRectAnnotation->Visible = false;
-		diagonalLineAnnotation->Visible = false;
-		for each (HorizontalLineAnnotation ^ line in fibLineAnnotations) line->Visible = false;
-		for each (TextAnnotation ^ label in fibLabelAnnotations) label->Visible = false;
-		return;
-	}
-
-	// Convert pixel coordinates to axis values
-	double startXVal, startYVal, endXVal, endYVal;
-	try {
-		startXVal = axisX->PixelPositionToValue(startPt.X);
-		startYVal = axisY->PixelPositionToValue(startPt.Y);
-		endXVal = axisX->PixelPositionToValue(endPt.X);
-		endYVal = axisY->PixelPositionToValue(endPt.Y);
-	}
-	catch (ArgumentException^) { // Handle cases where pixels are outside axis area
-		// Hide annotations and return if conversion fails
-		selectionRectAnnotation->Visible = false;
-		diagonalLineAnnotation->Visible = false;
-		for each (HorizontalLineAnnotation ^ line in fibLineAnnotations) line->Visible = false;
-		for each (TextAnnotation ^ label in fibLabelAnnotations) label->Visible = false;
-		return;
-	}
-
 	// Determine axis bounds
 	double minXVal = Math::Min(startXVal, endXVal);
 	double maxXVal = Math::Max(startXVal, endXVal);
-	double minYVal = Math::Min(startYVal, endYVal); // Min axis value (visually lower)
-	double maxYVal = Math::Max(startYVal, endYVal); // Max axis value (visually higher)
+	double minYVal = Math::Min(startYVal, endYVal); // Absolute Min Y of the selection/wave
+	double maxYVal = Math::Max(startYVal, endYVal); // Absolute Max Y of the selection/wave
 	double widthX = maxXVal - minXVal;
-	double heightY = maxYVal - minYVal;
+	double heightY = maxYVal - minYVal; // Total vertical span
 
-	// Check for near-zero size due to double precision or conversion limits
-	// Use a small epsilon based on axis range if needed, or just check > 0
+	// Check for near-zero size
 	bool hasSize = (widthX > Double::Epsilon && heightY > Double::Epsilon);
 
 	if (!hasSize) {
-		// If no valid size, hide everything
-		selectionRectAnnotation->Visible = false;
-		diagonalLineAnnotation->Visible = false;
-		for each (HorizontalLineAnnotation ^ line in fibLineAnnotations) line->Visible = false;
-		for each (TextAnnotation ^ label in fibLabelAnnotations) label->Visible = false;
+		ClearRetracementVisuals(); // Hide if no size
 		return;
 	}
 
-	// --- Update Annotations ONLY if size is valid ---
+	// --- Clear previous Confirmation Markers ---
+	if (chart_CandlestickChart->Series->IndexOf("Confirmations") != -1) {
+		chart_CandlestickChart->Series["Confirmations"]->Points->Clear();
+	}
 
 	// --- Update Selection Rectangle (Axis Coords) ---
 	selectionRectAnnotation->X = minXVal;
-	selectionRectAnnotation->Y = maxYVal; // Y is still the 'anchor' top edge in axis coords
+	selectionRectAnnotation->Y = maxYVal; // Anchor at top Y value
 	selectionRectAnnotation->Width = widthX;
-	// *** USE NEGATIVE HEIGHT FOR VISUAL CORRECTION ***
-	selectionRectAnnotation->Height = -heightY; // Use negative height based on user observation
+	selectionRectAnnotation->Height = -heightY; // Use negative height for visual correction
 	selectionRectAnnotation->Visible = true;
 
 	// --- Update Diagonal Line (Axis Coords) ---
+	// Connects the specific start/end points
 	diagonalLineAnnotation->X = startXVal;
 	diagonalLineAnnotation->Y = startYVal;
 	diagonalLineAnnotation->Width = endXVal - startXVal;
 	diagonalLineAnnotation->Height = endYVal - startYVal;
-	diagonalLineAnnotation->Visible = true; // Make visible
+	diagonalLineAnnotation->Visible = true;
 
 	// --- Update Fibonacci Lines & Labels (Axis Coords) ---
 	for (int i = 0; i < fibLevels->Length; ++i) {
+		// Calculate Y value based on the total vertical span (minYVal to maxYVal)
 		double fibYValue = minYVal + fibLevels[i] * heightY;
 
 		// Update Line
-		if (i < fibLineAnnotations->Count) {
+		if (i < fibLineAnnotations->Count && fibLineAnnotations[i] != nullptr) {
 			HorizontalLineAnnotation^ hLine = fibLineAnnotations[i];
 			hLine->Y = fibYValue;
-			hLine->X = minXVal;
-			hLine->Width = widthX;
-			hLine->Visible = true; // Make visible
+			hLine->X = minXVal;   // Start at the left edge
+			hLine->Width = widthX; // Span the width
+			hLine->Visible = true;
 		}
 
 		// Update Label (Optional)
-		if (i < fibLabelAnnotations->Count) {
+		if (i < fibLabelAnnotations->Count && fibLabelAnnotations[i] != nullptr) {
 			TextAnnotation^ tLabel = fibLabelAnnotations[i];
-			tLabel->X = maxXVal - (axisX->Maximum - axisX->Minimum) * 0.01; // Offset slightly from right edge
+			// Position label slightly inside the right edge
+			tLabel->X = maxXVal - (axisX->Maximum - axisX->Minimum) * 0.01;
 			tLabel->Y = fibYValue;
-			tLabel->Visible = true; // Make visible
+			tLabel->Visible = true;
 		}
 	}
 }
@@ -1009,20 +1240,12 @@ private: void UpdateSelectionVisuals()
 private: System::Void chart_CandlestickChart_MouseDown(System::Object^ sender, System::Windows::Forms::MouseEventArgs^ e) {
 	if (rubberBandSelection == nullptr || chart_CandlestickChart->ChartAreas->Count == 0) return;
 
-	// Hide annotations from previous selection
-	if (selectionRectAnnotation != nullptr) selectionRectAnnotation->Visible = false;
-	if (diagonalLineAnnotation != nullptr) diagonalLineAnnotation->Visible = false;
-	if (fibLineAnnotations != nullptr) {
-		for each(HorizontalLineAnnotation ^ line in fibLineAnnotations) line->Visible = false;
-	}
-	if (fibLabelAnnotations != nullptr) {
-		for each(TextAnnotation ^ label in fibLabelAnnotations) label->Visible = false;
-	}
-
+	// *** Clear All Previous Retracement Visuals on New Click ***
+	ClearRetracementVisuals();
 
 	// Check if click is within plot area (Optional but recommended)
 	ChartArea^ chartArea = chart_CandlestickChart->ChartAreas[0];
-	// ... (rest of plot area check logic from previous example) ...
+	// ... (plot area check logic) ...
 	// if (click is inside plot area) {
 	rubberBandSelection->BeginSelection(e->Location);
 	// }
@@ -1031,96 +1254,78 @@ private: System::Void chart_CandlestickChart_MouseDown(System::Object^ sender, S
 private: System::Void chart_CandlestickChart_MouseMove(System::Object^ sender, System::Windows::Forms::MouseEventArgs^ e) {
 	if (rubberBandSelection != nullptr && rubberBandSelection->IsSelecting) {
 		rubberBandSelection->UpdateSelection(e->Location);
-		UpdateSelectionVisuals(); // Call the new update function
+
+		// --- Draw retracement based on current mouse drag (pixel to axis conversion) ---
+		Point startPt = rubberBandSelection->StartPoint;
+		Point endPt = rubberBandSelection->EndPoint;
+		if (startPt.Equals(endPt)) { // Don't draw if no movement yet
+			ClearRetracementVisuals(); // Ensure hidden
+			return;
+		}
+
+		ChartArea^ chartArea = chart_CandlestickChart->ChartAreas[0];
+		Axis^ axisX = chartArea->AxisX;
+		Axis^ axisY = chartArea->AxisY;
+		double startXVal, startYVal, endXVal, endYVal;
+		try {
+			startXVal = axisX->PixelPositionToValue(startPt.X);
+			startYVal = axisY->PixelPositionToValue(startPt.Y);
+			endXVal = axisX->PixelPositionToValue(endPt.X);
+			endYVal = axisY->PixelPositionToValue(endPt.Y);
+
+			// Call the unified drawing function
+			DrawFibRetracement(startXVal, startYVal, endXVal, endYVal);
+		}
+		catch (ArgumentException^) {
+			// Conversion failed (likely outside chart area), hide visuals
+			ClearRetracementVisuals();
+		}
 	}
 }
 
 private: System::Void chart_CandlestickChart_MouseUp(System::Object^ sender, System::Windows::Forms::MouseEventArgs^ e) {
 	if (rubberBandSelection != nullptr && rubberBandSelection->IsSelecting) {
-		rubberBandSelection->EndSelection(e->Location);
-		UpdateSelectionVisuals(); // Draw final state
+		rubberBandSelection->EndSelection(e->Location); // Sets IsSelecting = false
 
-		// --- Confirmation Check Logic (Modified Y-Bounds Calculation) ---
-		if (selectionRectAnnotation != nullptr && // Added null check
-			selectionRectAnnotation->Visible && selectionRectAnnotation->Width > 0 && Math::Abs(selectionRectAnnotation->Height) > 0 && // Check Abs(Height)
-			filteredCandlesticks != nullptr && filteredCandlesticks->Count > 0 &&
-			fibLineAnnotations != nullptr && chart_CandlestickChart->ChartAreas->Count > 0)
-		{
-			ChartArea^ chartArea = chart_CandlestickChart->ChartAreas[0];
-			Axis^ axisX = chartArea->AxisX;
-			Axis^ axisY = chartArea->AxisY;
+		// --- Final Draw & Confirmation Check ---
+		Point startPt = rubberBandSelection->StartPoint;
+		Point endPt = rubberBandSelection->EndPoint;
+		if (startPt.Equals(endPt)) { // No actual selection drawn
+			ClearRetracementVisuals();
+			return;
+		}
 
-			// Get final selection bounds in Axis coordinates
-			double minXVal = selectionRectAnnotation->X;
-			double maxXVal = selectionRectAnnotation->X + selectionRectAnnotation->Width;
+		ChartArea^ chartArea = chart_CandlestickChart->ChartAreas[0];
+		Axis^ axisX = chartArea->AxisX;
+		Axis^ axisY = chartArea->AxisY;
+		double startXVal, startYVal, endXVal, endYVal;
+		try {
+			startXVal = axisX->PixelPositionToValue(startPt.X);
+			startYVal = axisY->PixelPositionToValue(startPt.Y);
+			endXVal = axisX->PixelPositionToValue(endPt.X);
+			endYVal = axisY->PixelPositionToValue(endPt.Y);
 
-			// *** MODIFIED Y BOUNDS CALCULATION ***
-			// Calculate the two Y edges based on anchor Y and the (negative) Height
-			double yEdge1 = selectionRectAnnotation->Y;
-			double yEdge2 = selectionRectAnnotation->Y + selectionRectAnnotation->Height; // Height is negative here
-			// Determine the actual min and max Y values represented by the rectangle
-			double finalMinYVal = Math::Min(yEdge1, yEdge2);
-			double finalMaxYVal = Math::Max(yEdge1, yEdge2);
-			// *** END MODIFIED Y BOUNDS CALCULATION ***
+			// Final draw using axis coordinates
+			DrawFibRetracement(startXVal, startYVal, endXVal, endYVal);
 
-			// Get final Fibonacci Y-Axis values (check visibility)
-			List<double>^ fibYValues = gcnew List<double>();
-			for each (HorizontalLineAnnotation ^ line in fibLineAnnotations) {
-				if (line != nullptr && line->Visible) { // Added null check for line
-					fibYValues->Add(line->Y);
-				}
-			}
+			// Calculate bounds for confirmation check
+			double minXVal = Math::Min(startXVal, endXVal);
+			double maxXVal = Math::Max(startXVal, endXVal);
+			double minYVal = Math::Min(startYVal, endYVal);
+			double maxYVal = Math::Max(startYVal, endYVal);
 
-			int confirmationCount = 0;
-			double tolerance = 0.0; // Tolerance for touching
-			if (axisY->Maximum > axisY->Minimum) {
-				tolerance = (axisY->Maximum - axisY->Minimum) * 0.002; // 0.2% of visible Y range
-			}
-			if (tolerance <= 0) tolerance = 0.05; // Fallback
+			// Calculate and show confirmations
+			int confirmationCount = CalculateAndShowConfirmations(minXVal, maxXVal, minYVal, maxYVal);
 
-			// Iterate through visible candlesticks
-			for each (Candlestick ^ candle in filteredCandlesticks) {
-				if (candle == nullptr) continue;
-
-				double candleXVal = candle->Timestamp.ToOADate();
-				// Check if candle's X value is within the selection rectangle's X range
-				if (candleXVal >= minXVal && candleXVal <= maxXVal) {
-					bool touched = false;
-					for each (double fibY in fibYValues) {
-						// Use the correctly calculated finalMinYVal and finalMaxYVal here indirectly via tolerance check
-						if ((Math::Abs(candle->High - fibY) <= tolerance) ||
-							(Math::Abs(candle->Low - fibY) <= tolerance) ||
-							(Math::Abs(candle->Open - fibY) <= tolerance) ||
-							(Math::Abs(candle->Close - fibY) <= tolerance) ||
-							// Check if fib level falls BETWEEN corrected High and Low
-							(candle->Low < fibY && candle->High > fibY))
-						{
-							// Ensure the touch point is also within the visual rectangle bounds
-							if (fibY >= finalMinYVal && fibY <= finalMaxYVal) {
-								touched = true;
-								break; // Move to next candle
-							}
-							// Handle touches at High/Low etc even if slightly outside tolerance
-							else if ((Math::Abs(candle->High - fibY) <= tolerance && candle->High >= finalMinYVal && candle->High <= finalMaxYVal) ||
-								(Math::Abs(candle->Low - fibY) <= tolerance && candle->Low >= finalMinYVal && candle->Low <= finalMaxYVal) ||
-								(Math::Abs(candle->Open - fibY) <= tolerance && candle->Open >= finalMinYVal && candle->Open <= finalMaxYVal) ||
-								(Math::Abs(candle->Close - fibY) <= tolerance && candle->Close >= finalMinYVal && candle->Close <= finalMaxYVal))
-							{
-								touched = true;
-								break;
-							}
-						}
-					}
-					if (touched) {
-						confirmationCount++;
-					}
-				}
-			}
-
-			// Display the count
-			/*MessageBox::Show("Fibonacci Confirmations within selection: " + confirmationCount,
-				"Confirmation Count", MessageBoxButtons::OK, MessageBoxIcon::Information);*/
+			// Display count
 			this->textBox_confirmations->Text = confirmationCount.ToString();
+			// MessageBox::Show("Fibonacci Confirmations within selection: " + confirmationCount,
+			//	"Confirmation Count", MessageBoxButtons::OK, MessageBoxIcon::Information);
+
+		}
+		catch (ArgumentException^) {
+			// Final conversion failed, ensure visuals are cleared
+			ClearRetracementVisuals();
 		}
 	}
 }
