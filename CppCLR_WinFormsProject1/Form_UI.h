@@ -247,77 +247,115 @@ namespace CppCLRWinFormsProject {
 	}
 
 	// *** NEW: Calculates Confirmations and Plots Markers ***
-	int CalculateAndShowConfirmations(double minXVal, double maxXVal, double minYVal, double maxYVal)
+	private: int CalculateAndShowConfirmations(double minXVal, double maxXVal, double minYVal, double maxYVal)
 	{
 		int confirmationCount = 0;
-		// Clear previous markers
-		if (chart_CandlestickChart->Series->IndexOf("Confirmations") != -1) {
-			chart_CandlestickChart->Series["Confirmations"]->Points->Clear();
+		// --- Clear previous markers ---
+		Series^ confirmationSeries = nullptr;
+		// Defensive checks for chart and series objects
+		if (chart_CandlestickChart != nullptr && chart_CandlestickChart->Series != nullptr && chart_CandlestickChart->Series->IndexOf("Confirmations") != -1) {
+			confirmationSeries = chart_CandlestickChart->Series["Confirmations"];
+			confirmationSeries->Points->Clear();
 		}
 		else {
-			return 0; // Cannot plot if series doesn't exist
+			System::Diagnostics::Debug::WriteLine("Warning: 'Confirmations' series not found for plotting markers.");
+			// Cannot plot, but can still calculate count if data is available
 		}
 
+		// --- Check necessary data ---
 		if (filteredCandlesticks == nullptr || filteredCandlesticks->Count == 0 ||
-			fibLineAnnotations == nullptr || chart_CandlestickChart->ChartAreas->Count == 0)
+			fibLineAnnotations == nullptr || chart_CandlestickChart == nullptr || chart_CandlestickChart->ChartAreas->Count == 0)
 		{
+			// Update TextBox to 0 if we can't calculate
+			if (textBox_confirmations != nullptr) {
+				textBox_confirmations->Text = "0";
+			}
 			return 0; // Cannot calculate
 		}
 
 		ChartArea^ chartArea = chart_CandlestickChart->ChartAreas[0];
 		Axis^ axisY = chartArea->AxisY;
+		if (axisY == nullptr) { // Axis null check
+			if (textBox_confirmations != nullptr) textBox_confirmations->Text = "0";
+			return 0;
+		}
 
-		// Get visible Fibonacci Y-Axis values
+
+		// --- Get visible Fibonacci Y-Axis values ---
 		List<double>^ fibYValues = gcnew List<double>();
 		for each (HorizontalLineAnnotation ^ line in fibLineAnnotations) {
+			// Also check line is not null itself
 			if (line != nullptr && line->Visible) {
 				fibYValues->Add(line->Y);
 			}
 		}
-		if (fibYValues->Count == 0) return 0; // No levels visible
-
-		double tolerance = 0.0; // Tolerance for touching
-		if (axisY->Maximum > axisY->Minimum) {
-			tolerance = (axisY->Maximum - axisY->Minimum) * 0.002; // 0.2%
+		if (fibYValues->Count == 0) {
+			if (textBox_confirmations != nullptr) textBox_confirmations->Text = "0";
+			return 0; // No levels visible
 		}
-		if (tolerance <= 0) tolerance = 0.05; // Fallback
 
-		// Iterate through visible candlesticks
+
+		// --- Calculate tolerance ---
+		double tolerance = 0.0;
+		try { // Add try block for safety when accessing axis properties
+			if (axisY->Maximum > axisY->Minimum && !Double::IsNaN(axisY->Maximum) && !Double::IsNaN(axisY->Minimum) &&
+				!Double::IsInfinity(axisY->Maximum) && !Double::IsInfinity(axisY->Minimum))
+			{
+				tolerance = (axisY->Maximum - axisY->Minimum) * 0.002; // 0.2%
+			}
+		}
+		catch (Exception^ ex) {
+			// Log error if axis properties fail
+			System::Diagnostics::Debug::WriteLine("Error accessing axis properties for tolerance: " + ex->Message);
+		}
+		if (tolerance <= 0 || Double::IsNaN(tolerance) || Double::IsInfinity(tolerance)) {
+			tolerance = 0.05; // Fallback small absolute value
+		}
+
+
+		// --- Iterate through candlesticks ---
 		for each (Candlestick ^ candle in filteredCandlesticks) {
 			if (candle == nullptr) continue;
 
 			double candleXVal = candle->Timestamp.ToOADate();
-			// Check if candle's X value is within the selection rectangle's X range
+			// Check X range
 			if (candleXVal >= minXVal && candleXVal <= maxXVal) {
-				// Check if any part of the candle touches any Fib line within the Y range
+				// Check Y range against Fib levels
 				for each (double fibY in fibYValues) {
-					// Ensure Fib level itself is within the selection's Y bounds
+					// Ensure Fib level itself is within the effective Y bounds of the selection
 					if (fibY >= minYVal && fibY <= maxYVal) {
 						bool touched = false;
-						double touchY = Double::NaN; // Y coordinate where touch occurs
+						double touchY = Double::NaN;
 
-						// Check High, Low, Open, Close against the fib level within tolerance
+						// Check High, Low, Open, Close within tolerance
 						if (Math::Abs(candle->High - fibY) <= tolerance) { touched = true; touchY = candle->High; }
 						else if (Math::Abs(candle->Low - fibY) <= tolerance) { touched = true; touchY = candle->Low; }
 						else if (Math::Abs(candle->Open - fibY) <= tolerance) { touched = true; touchY = candle->Open; }
 						else if (Math::Abs(candle->Close - fibY) <= tolerance) { touched = true; touchY = candle->Close; }
-						// Check if fib level falls BETWEEN High and Low (body cross)
-						else if (candle->Low < fibY && candle->High > fibY) { touched = true; touchY = fibY; } // Mark at the fib level itself
+						// Check if Fib level is within the candle body/wick (High/Low range)
+						else if (candle->Low <= fibY && candle->High >= fibY) { touched = true; touchY = fibY; }
 
 						if (touched) {
 							confirmationCount++;
-							// Add marker to the "Confirmations" series
-							chart_CandlestickChart->Series["Confirmations"]->Points->AddXY(candleXVal, touchY);
-							break; // Count only one confirmation per candle, move to next candle
+							// Add marker ONLY if series exists and touch coordinate is valid
+							if (confirmationSeries != nullptr && !Double::IsNaN(touchY)) {
+								// Add marker safely
+								try {
+									confirmationSeries->Points->AddXY(candleXVal, touchY);
+								}
+								catch (Exception^ ex) {
+									System::Diagnostics::Debug::WriteLine("Error adding confirmation marker: " + ex->Message);
+								}
+							}
+							break; // Count only one confirmation per candle
 						}
-					}
+					} // end fibY bounds check
 				} // end fibY loop
 			} // end X range check
 		} // end candle loop
 
-		// Display the count (optional)
-		// MessageBox::Show("Fibonacci Confirmations: " + confirmationCount, "Confirmation Count", MessageBoxButtons::OK, MessageBoxIcon::Information);
-
+		// *** RETURN the count ***
+		// The caller will update the TextBox
 		return confirmationCount;
 	}
 
@@ -360,14 +398,14 @@ private: System::ComponentModel::IContainer^ components;
 		void InitializeComponent(void)
 		{
 			this->components = (gcnew System::ComponentModel::Container());
-			System::Windows::Forms::DataVisualization::Charting::ChartArea^ chartArea3 = (gcnew System::Windows::Forms::DataVisualization::Charting::ChartArea());
-			System::Windows::Forms::DataVisualization::Charting::ChartArea^ chartArea4 = (gcnew System::Windows::Forms::DataVisualization::Charting::ChartArea());
-			System::Windows::Forms::DataVisualization::Charting::Legend^ legend2 = (gcnew System::Windows::Forms::DataVisualization::Charting::Legend());
-			System::Windows::Forms::DataVisualization::Charting::Series^ series6 = (gcnew System::Windows::Forms::DataVisualization::Charting::Series());
-			System::Windows::Forms::DataVisualization::Charting::Series^ series7 = (gcnew System::Windows::Forms::DataVisualization::Charting::Series());
-			System::Windows::Forms::DataVisualization::Charting::Series^ series8 = (gcnew System::Windows::Forms::DataVisualization::Charting::Series());
-			System::Windows::Forms::DataVisualization::Charting::Series^ series9 = (gcnew System::Windows::Forms::DataVisualization::Charting::Series());
-			System::Windows::Forms::DataVisualization::Charting::Series^ series10 = (gcnew System::Windows::Forms::DataVisualization::Charting::Series());
+			System::Windows::Forms::DataVisualization::Charting::ChartArea^ chartArea1 = (gcnew System::Windows::Forms::DataVisualization::Charting::ChartArea());
+			System::Windows::Forms::DataVisualization::Charting::ChartArea^ chartArea2 = (gcnew System::Windows::Forms::DataVisualization::Charting::ChartArea());
+			System::Windows::Forms::DataVisualization::Charting::Legend^ legend1 = (gcnew System::Windows::Forms::DataVisualization::Charting::Legend());
+			System::Windows::Forms::DataVisualization::Charting::Series^ series1 = (gcnew System::Windows::Forms::DataVisualization::Charting::Series());
+			System::Windows::Forms::DataVisualization::Charting::Series^ series2 = (gcnew System::Windows::Forms::DataVisualization::Charting::Series());
+			System::Windows::Forms::DataVisualization::Charting::Series^ series3 = (gcnew System::Windows::Forms::DataVisualization::Charting::Series());
+			System::Windows::Forms::DataVisualization::Charting::Series^ series4 = (gcnew System::Windows::Forms::DataVisualization::Charting::Series());
+			System::Windows::Forms::DataVisualization::Charting::Series^ series5 = (gcnew System::Windows::Forms::DataVisualization::Charting::Series());
 			this->openFileDialog_LoadTicker = (gcnew System::Windows::Forms::OpenFileDialog());
 			this->button_LoadTicker = (gcnew System::Windows::Forms::Button());
 			this->dateTimePicker_startDate = (gcnew System::Windows::Forms::DateTimePicker());
@@ -418,7 +456,7 @@ private: System::ComponentModel::IContainer^ components;
 			this->dateTimePicker_startDate->Name = L"dateTimePicker_startDate";
 			this->dateTimePicker_startDate->Size = System::Drawing::Size(200, 20);
 			this->dateTimePicker_startDate->TabIndex = 3;
-			this->dateTimePicker_startDate->Value = System::DateTime(2024, 1, 1, 0, 0, 0, 0);
+			this->dateTimePicker_startDate->Value = System::DateTime(2021, 2, 1, 0, 0, 0, 0);
 			// 
 			// dateTimePicker_endDate
 			// 
@@ -447,64 +485,64 @@ private: System::ComponentModel::IContainer^ components;
 			// 
 			// chart_CandlestickChart
 			// 
-			chartArea3->Name = L"Chart_OHLC";
-			chartArea4->AlignWithChartArea = L"Chart_OHLC";
-			chartArea4->Name = L"Chart_Volume";
-			chartArea4->Visible = false;
-			this->chart_CandlestickChart->ChartAreas->Add(chartArea3);
-			this->chart_CandlestickChart->ChartAreas->Add(chartArea4);
-			legend2->BackColor = System::Drawing::Color::White;
-			legend2->Enabled = false;
-			legend2->LegendStyle = System::Windows::Forms::DataVisualization::Charting::LegendStyle::Column;
-			legend2->Name = L"Legend1";
-			legend2->ShadowOffset = 3;
-			this->chart_CandlestickChart->Legends->Add(legend2);
+			chartArea1->Name = L"Chart_OHLC";
+			chartArea2->AlignWithChartArea = L"Chart_OHLC";
+			chartArea2->Name = L"Chart_Volume";
+			chartArea2->Visible = false;
+			this->chart_CandlestickChart->ChartAreas->Add(chartArea1);
+			this->chart_CandlestickChart->ChartAreas->Add(chartArea2);
+			legend1->BackColor = System::Drawing::Color::White;
+			legend1->Enabled = false;
+			legend1->LegendStyle = System::Windows::Forms::DataVisualization::Charting::LegendStyle::Column;
+			legend1->Name = L"Legend1";
+			legend1->ShadowOffset = 3;
+			this->chart_CandlestickChart->Legends->Add(legend1);
 			this->chart_CandlestickChart->Location = System::Drawing::Point(0, 0);
 			this->chart_CandlestickChart->Name = L"chart_CandlestickChart";
-			series6->ChartArea = L"Chart_OHLC";
-			series6->ChartType = System::Windows::Forms::DataVisualization::Charting::SeriesChartType::Candlestick;
-			series6->CustomProperties = L"PriceDownColor=Red, PriceUpColor=ForestGreen";
-			series6->Legend = L"Legend1";
-			series6->Name = L"Series_OHLC";
-			series6->XValueMember = L"Timestamp";
-			series6->XValueType = System::Windows::Forms::DataVisualization::Charting::ChartValueType::DateTime;
-			series6->YValueMembers = L"High,Low,Open,Close";
-			series6->YValuesPerPoint = 4;
-			series7->ChartArea = L"Chart_Volume";
-			series7->IsXValueIndexed = true;
-			series7->Legend = L"Legend1";
-			series7->Name = L"Series_Volume";
-			series7->XValueMember = L"Timestamp";
-			series7->XValueType = System::Windows::Forms::DataVisualization::Charting::ChartValueType::Date;
-			series7->YValueMembers = L"Volume";
-			series8->ChartArea = L"Chart_OHLC";
-			series8->ChartType = System::Windows::Forms::DataVisualization::Charting::SeriesChartType::Point;
-			series8->Color = System::Drawing::Color::Lime;
-			series8->Enabled = false;
-			series8->Legend = L"Legend1";
-			series8->MarkerSize = 8;
-			series8->MarkerStyle = System::Windows::Forms::DataVisualization::Charting::MarkerStyle::Diamond;
-			series8->Name = L"Peaks";
-			series9->ChartArea = L"Chart_OHLC";
-			series9->ChartType = System::Windows::Forms::DataVisualization::Charting::SeriesChartType::Point;
-			series9->Color = System::Drawing::Color::Red;
-			series9->Enabled = false;
-			series9->Legend = L"Legend1";
-			series9->MarkerSize = 8;
-			series9->MarkerStyle = System::Windows::Forms::DataVisualization::Charting::MarkerStyle::Diamond;
-			series9->Name = L"Valleys";
-			series10->ChartArea = L"Chart_OHLC";
-			series10->ChartType = System::Windows::Forms::DataVisualization::Charting::SeriesChartType::Point;
-			series10->Legend = L"Legend1";
-			series10->MarkerColor = System::Drawing::Color::Fuchsia;
-			series10->MarkerSize = 6;
-			series10->MarkerStyle = System::Windows::Forms::DataVisualization::Charting::MarkerStyle::Circle;
-			series10->Name = L"Confirmations";
-			this->chart_CandlestickChart->Series->Add(series6);
-			this->chart_CandlestickChart->Series->Add(series7);
-			this->chart_CandlestickChart->Series->Add(series8);
-			this->chart_CandlestickChart->Series->Add(series9);
-			this->chart_CandlestickChart->Series->Add(series10);
+			series1->ChartArea = L"Chart_OHLC";
+			series1->ChartType = System::Windows::Forms::DataVisualization::Charting::SeriesChartType::Candlestick;
+			series1->CustomProperties = L"PriceDownColor=Red, PriceUpColor=ForestGreen";
+			series1->Legend = L"Legend1";
+			series1->Name = L"Series_OHLC";
+			series1->XValueMember = L"Timestamp";
+			series1->XValueType = System::Windows::Forms::DataVisualization::Charting::ChartValueType::DateTime;
+			series1->YValueMembers = L"High,Low,Open,Close";
+			series1->YValuesPerPoint = 4;
+			series2->ChartArea = L"Chart_Volume";
+			series2->IsXValueIndexed = true;
+			series2->Legend = L"Legend1";
+			series2->Name = L"Series_Volume";
+			series2->XValueMember = L"Timestamp";
+			series2->XValueType = System::Windows::Forms::DataVisualization::Charting::ChartValueType::Date;
+			series2->YValueMembers = L"Volume";
+			series3->ChartArea = L"Chart_OHLC";
+			series3->ChartType = System::Windows::Forms::DataVisualization::Charting::SeriesChartType::Point;
+			series3->Color = System::Drawing::Color::Lime;
+			series3->Enabled = false;
+			series3->Legend = L"Legend1";
+			series3->MarkerSize = 8;
+			series3->MarkerStyle = System::Windows::Forms::DataVisualization::Charting::MarkerStyle::Diamond;
+			series3->Name = L"Peaks";
+			series4->ChartArea = L"Chart_OHLC";
+			series4->ChartType = System::Windows::Forms::DataVisualization::Charting::SeriesChartType::Point;
+			series4->Color = System::Drawing::Color::Red;
+			series4->Enabled = false;
+			series4->Legend = L"Legend1";
+			series4->MarkerSize = 8;
+			series4->MarkerStyle = System::Windows::Forms::DataVisualization::Charting::MarkerStyle::Diamond;
+			series4->Name = L"Valleys";
+			series5->ChartArea = L"Chart_OHLC";
+			series5->ChartType = System::Windows::Forms::DataVisualization::Charting::SeriesChartType::Point;
+			series5->Legend = L"Legend1";
+			series5->MarkerColor = System::Drawing::Color::Fuchsia;
+			series5->MarkerSize = 6;
+			series5->MarkerStyle = System::Windows::Forms::DataVisualization::Charting::MarkerStyle::Circle;
+			series5->Name = L"Confirmations";
+			this->chart_CandlestickChart->Series->Add(series1);
+			this->chart_CandlestickChart->Series->Add(series2);
+			this->chart_CandlestickChart->Series->Add(series3);
+			this->chart_CandlestickChart->Series->Add(series4);
+			this->chart_CandlestickChart->Series->Add(series5);
 			this->chart_CandlestickChart->Size = System::Drawing::Size(747, 536);
 			this->chart_CandlestickChart->TabIndex = 7;
 			this->chart_CandlestickChart->Text = L"chart1";
@@ -629,6 +667,7 @@ private: System::ComponentModel::IContainer^ components;
 			this->scrollBar_SimMinPercent->Name = L"scrollBar_SimMinPercent";
 			this->scrollBar_SimMinPercent->Size = System::Drawing::Size(80, 17);
 			this->scrollBar_SimMinPercent->TabIndex = 19;
+			this->scrollBar_SimMinPercent->Value = 5;
 			this->scrollBar_SimMinPercent->Scroll += gcnew System::Windows::Forms::ScrollEventHandler(this, &Form_UI::scrollBar_SimPercent_Scroll);
 			// 
 			// scrollBar_SimMaxPercent
@@ -638,6 +677,7 @@ private: System::ComponentModel::IContainer^ components;
 			this->scrollBar_SimMaxPercent->Name = L"scrollBar_SimMaxPercent";
 			this->scrollBar_SimMaxPercent->Size = System::Drawing::Size(80, 17);
 			this->scrollBar_SimMaxPercent->TabIndex = 20;
+			this->scrollBar_SimMaxPercent->Value = 5;
 			this->scrollBar_SimMaxPercent->Scroll += gcnew System::Windows::Forms::ScrollEventHandler(this, &Form_UI::scrollBar_SimPercent_Scroll);
 			// 
 			// label_SimMinPercentValue
@@ -1041,41 +1081,78 @@ private: System::ComponentModel::IContainer^ components;
 		return candlesticks;
 	}
 	// *** Handles wave selection from either ComboBox ***
-		   void HandleWaveSelection(Wave^ selectedWave) {
+		   private: void HandleWaveSelection(Wave^ selectedWave) {
 			   // Stop any ongoing simulation first
 			   StopSimulation();
+			   // Clear previous visuals immediately
 			   ClearRetracementVisuals();
 
+			   // --- Validate Input ---
 			   if (selectedWave == nullptr || selectedWave->pv1 == nullptr || selectedWave->pv2 == nullptr ||
-				   chart_CandlestickChart->Series["Series_OHLC"] == nullptr || filteredCandlesticks == nullptr) {
+				   chart_CandlestickChart == nullptr || chart_CandlestickChart->Series == nullptr ||
+				   chart_CandlestickChart->Series->IndexOf("Series_OHLC") == -1 ||
+				   filteredCandlesticks == nullptr) {
+
 				   activeWaveDefined = false; // Ensure flag is false if wave is invalid
-				   // Disable controls if no valid wave selected
-				   button_SimulateStartStop->Enabled = false;
-				   button_StepUp->Enabled = false;
-				   button_StepDown->Enabled = false;
-				   scrollBar_SimMinPercent->Enabled = false;
-				   scrollBar_SimMaxPercent->Enabled = false;
-				   textBox_StepSizePercent->Enabled = false;
-				   return;
+				   // Keep controls disabled (already handled by ClearRetracementVisuals)
+				   if (textBox_confirmations != nullptr) textBox_confirmations->Text = ""; // Clear text
+				   return; // Cannot process if wave or data is invalid
 			   }
 
 			   int idx1 = selectedWave->pv1->index;
 			   int idx2 = selectedWave->pv2->index;
-			   int pointCount = chart_CandlestickChart->Series["Series_OHLC"]->Points->Count;
+
+			   Series^ ohlcSeries = chart_CandlestickChart->Series["Series_OHLC"];
+			   int pointCount = ohlcSeries->Points->Count;
 			   int filteredCount = filteredCandlesticks->Count;
-			   if (idx1 < 0 || idx1 >= pointCount || idx2 < 0 || idx2 >= pointCount || idx1 >= filteredCount || idx2 >= filteredCount) {
+
+			   // Validate indices against BOTH lists they are used for
+			   if (idx1 < 0 || idx1 >= pointCount || idx2 < 0 || idx2 >= pointCount || // OHLC index check
+				   idx1 >= filteredCount || idx2 >= filteredCount)                     // FilteredList index check
+			   {
+				   System::Diagnostics::Debug::WriteLine("Wave selection index out of bounds.");
 				   activeWaveDefined = false; // Ensure flag is false if indices are invalid
-				   // Disable controls
-				   button_SimulateStartStop->Enabled = false; // etc.
+				   // Keep controls disabled
+				   if (textBox_confirmations != nullptr) textBox_confirmations->Text = "";
 				   return;
 			   }
 
-			   DataPoint^ dpStart = chart_CandlestickChart->Series["Series_OHLC"]->Points[idx1];
-			   DataPoint^ dpEnd = chart_CandlestickChart->Series["Series_OHLC"]->Points[idx2];
-			   double yVal1 = selectedWave->pv1->IsPeak ? filteredCandlesticks[idx1]->High : filteredCandlesticks[idx1]->Low;
-			   double yVal2 = selectedWave->pv2->IsPeak ? filteredCandlesticks[idx2]->High : filteredCandlesticks[idx2]->Low;
+			   // --- Get Coordinates ---
+			   DataPoint^ dpStart = nullptr;
+			   DataPoint^ dpEnd = nullptr;
+			   double yVal1 = Double::NaN;
+			   double yVal2 = Double::NaN;
 
-			   // *** STORE ACTIVE WAVE INFO ***
+			   try { // Add try-catch for safety when accessing points/data
+				   dpStart = ohlcSeries->Points[idx1];
+				   dpEnd = ohlcSeries->Points[idx2];
+
+				   // Check if peak/valley information is reliable before accessing High/Low
+				   if (selectedWave->pv1->IsPeak || selectedWave->pv1->IsValley) {
+					   yVal1 = selectedWave->pv1->IsPeak ? filteredCandlesticks[idx1]->High : filteredCandlesticks[idx1]->Low;
+				   }
+				   else { throw gcnew InvalidOperationException("Wave PV1 is neither Peak nor Valley."); }
+
+				   if (selectedWave->pv2->IsPeak || selectedWave->pv2->IsValley) {
+					   yVal2 = selectedWave->pv2->IsPeak ? filteredCandlesticks[idx2]->High : filteredCandlesticks[idx2]->Low;
+				   }
+				   else { throw gcnew InvalidOperationException("Wave PV2 is neither Peak nor Valley."); }
+
+				   // Check for NaN coordinates
+				   if (dpStart == nullptr || dpEnd == nullptr || Double::IsNaN(yVal1) || Double::IsNaN(yVal2)) {
+					   throw gcnew InvalidOperationException("Failed to retrieve valid wave coordinates.");
+				   }
+
+			   }
+			   catch (Exception^ ex) {
+				   System::Diagnostics::Debug::WriteLine("Error getting wave coordinates: " + ex->Message);
+				   activeWaveDefined = false;
+				   if (textBox_confirmations != nullptr) textBox_confirmations->Text = "";
+				   return; // Exit if coordinates are invalid
+			   }
+
+
+			   // --- Store Active Wave Info ---
 			   activeWaveDefined = true;
 			   activeWaveStartXVal = dpStart->XValue;
 			   activeWaveStartYVal = yVal1; // Start Y is defined by the first PV's value
@@ -1083,23 +1160,29 @@ private: System::ComponentModel::IContainer^ components;
 			   activeWaveBaseEndYVal = yVal2; // Store the wave's defined end Y
 			   activeWaveCurrentEndYVal = yVal2; // Initialize current Y
 
-			   // Initial Draw
+			   // --- Initial Draw ---
 			   DrawFibRetracement(activeWaveStartXVal, activeWaveStartYVal, activeWaveEndXVal, activeWaveCurrentEndYVal);
 
-			   // Calculate bounds for confirmation check
+			   // --- Calculate Bounds for Confirmation Check ---
 			   double minXVal = Math::Min(activeWaveStartXVal, activeWaveEndXVal);
 			   double maxXVal = Math::Max(activeWaveStartXVal, activeWaveEndXVal);
-			   double minYVal = Math::Min(activeWaveStartYVal, activeWaveCurrentEndYVal); // Use current (which is base initially)
+			   double minYVal = Math::Min(activeWaveStartYVal, activeWaveCurrentEndYVal); // Use absolute min/max
 			   double maxYVal = Math::Max(activeWaveStartYVal, activeWaveCurrentEndYVal);
 
-			   // Calculate and show confirmations for the selected wave
-			   int confirmationCount = CalculateAndShowConfirmations(minXVal, maxXVal, minYVal, maxYVal);
-			   // Display count differently for combo selection
-			   this->textBox_confirmations->Text = confirmationCount.ToString();
-			    
-			   // MessageBox::Show("Confirmations for selected wave: " + confirmationCount, ...);
+			   // --- Calculate, Show Confirmations, Update TextBox ---
+			   // Ensure bounds are valid
+			   if (!Double::IsNaN(minXVal) && !Double::IsNaN(maxXVal) && !Double::IsNaN(minYVal) && !Double::IsNaN(maxYVal))
+			   {
+				   int confirmationCount = CalculateAndShowConfirmations(minXVal, maxXVal, minYVal, maxYVal);
+				   if (textBox_confirmations != nullptr) {
+					   textBox_confirmations->Text = confirmationCount.ToString();
+				   }
+			   }
+			   else {
+				   if (textBox_confirmations != nullptr) textBox_confirmations->Text = "Error";
+			   }
 
-			   // *** ENABLE CONTROLS ***
+			   // --- Enable Controls ---
 			   button_SimulateStartStop->Enabled = true;
 			   button_StepUp->Enabled = true;
 			   button_StepDown->Enabled = true;
@@ -1172,12 +1255,89 @@ private: System::ComponentModel::IContainer^ components;
 		return (filteredCandlesticks);
 	}
 
-private: System::Void Form_UI_Load(System::Object^ sender, System::EventArgs^ e) {
-	return;
-	
-	this->WindowState = FormWindowState::Maximized;
+		   // Inside Form_UI class
 
-	openFileDialog_LoadTicker->ShowDialog();
+private: System::Void Form_UI_Load(System::Object^ sender, System::EventArgs^ e) {
+	// --- Auto-load ABBV on startup ---
+
+	// 1. Define the default file and directory
+	String^ defaultFileName = "ABBV-Day.csv"; // Exact filename provided by user
+	String^ initialDataDirectory = ""; // Initialize path variable
+
+	try {
+		// Get the directory where the application executable is located
+		String^ exeDirectory = Application::StartupPath;
+		// Get the parent directory (one level up from the executable's directory)
+		System::IO::DirectoryInfo^ parentInfo = System::IO::Directory::GetParent(exeDirectory);
+
+		if (parentInfo == nullptr) {
+			throw gcnew System::IO::DirectoryNotFoundException("Could not determine the parent directory of the application.");
+		}
+		String^ parentDirectoryPath = parentInfo->FullName;
+
+		// Combine the parent path with the "Stock Data" folder name
+		initialDataDirectory = System::IO::Path::Combine(parentDirectoryPath, "Stock Data");
+
+	}
+	catch (Exception^ ex) {
+		MessageBox::Show("Error determining initial data directory:\n" + ex->Message +
+			"\nPlease select the file manually.",
+			"Directory Error", MessageBoxButtons::OK, MessageBoxIcon::Warning);
+		// Default to application directory if path calculation fails, or leave blank
+		initialDataDirectory = Application::StartupPath;
+	}
+
+
+	// 2. Configure the OpenFileDialog
+	if (openFileDialog_LoadTicker != nullptr) // Null check for safety
+	{
+		openFileDialog_LoadTicker->InitialDirectory = initialDataDirectory;
+		openFileDialog_LoadTicker->FileName = defaultFileName; // Pre-selects the file
+		openFileDialog_LoadTicker->Filter = "CSV Files (*.csv)|*.csv|All Files (*.*)|*.*";
+		openFileDialog_LoadTicker->Title = "Select Stock File (Default: ABBV)";
+
+		// 3. Automatically show the dialog
+		System::Windows::Forms::DialogResult result = openFileDialog_LoadTicker->ShowDialog();
+
+		// 4. Process the result
+		if (result == System::Windows::Forms::DialogResult::OK)
+		{
+			// Check if the selected file actually exists before loading
+			String^ selectedFilePath = openFileDialog_LoadTicker->FileName;
+			if (System::IO::File::Exists(selectedFilePath))
+			{
+				try
+				{
+					// Load the selected ticker (should be the default ABBV)
+					loadTicker(selectedFilePath);
+				}
+				catch (Exception^ ex)
+				{
+					MessageBox::Show("Error loading initial file (" + System::IO::Path::GetFileName(selectedFilePath) + "):\n" + ex->Message,
+						"File Load Error", MessageBoxButtons::OK, MessageBoxIcon::Error);
+				}
+			}
+			else
+			{
+				MessageBox::Show("Default file not found in the expected directory:\n" + selectedFilePath +
+					"\nPlease select a file manually.",
+					"File Not Found", MessageBoxButtons::OK, MessageBoxIcon::Warning);
+				// Optionally trigger the load button click to immediately allow manual selection
+				// button_LoadTicker_Click(nullptr, nullptr);
+			}
+		}
+		else
+		{
+			// User cancelled the initial dialog
+			MessageBox::Show("No file selected on startup. Use 'Load Ticker' button to load data.",
+				"Startup Info", MessageBoxButtons::OK, MessageBoxIcon::Information);
+		}
+	}
+	else {
+		MessageBox::Show("OpenFileDialog component is not initialized.", "Initialization Error", MessageBoxButtons::OK, MessageBoxIcon::Error);
+	}
+
+	// Date range should be set by designer or constructor based on previous user statement
 }
 
 private: System::Void hScrollBar1_Scroll(System::Object^ sender, System::Windows::Forms::ScrollEventArgs^ e) {
@@ -1559,19 +1719,30 @@ private: System::Void chart_CandlestickChart_MouseMove(System::Object^ sender, S
 }
 
 private: System::Void chart_CandlestickChart_MouseUp(System::Object^ sender, System::Windows::Forms::MouseEventArgs^ e) {
-	if (rubberBandSelection != nullptr && rubberBandSelection->IsSelecting) {
+	// Check if selection object exists
+	if (rubberBandSelection == nullptr) return;
+
+	// Check if we were actually selecting
+	if (rubberBandSelection->IsSelecting) {
 		rubberBandSelection->EndSelection(e->Location); // Sets IsSelecting = false
 
 		Point startPt = rubberBandSelection->StartPoint;
 		Point endPt = rubberBandSelection->EndPoint;
+
+		// Don't process if it was just a click (no drag)
 		if (startPt.Equals(endPt)) {
-			ClearRetracementVisuals(); // Also resets activeWaveDefined
+			ClearRetracementVisuals(); // Ensure everything is cleared/disabled on click
 			return;
 		}
 
+		// Check if chart objects are ready
+		if (chart_CandlestickChart == nullptr || chart_CandlestickChart->ChartAreas->Count == 0) return;
 		ChartArea^ chartArea = chart_CandlestickChart->ChartAreas[0];
+		if (chartArea == nullptr || chartArea->AxisX == nullptr || chartArea->AxisY == nullptr) return;
 		Axis^ axisX = chartArea->AxisX;
 		Axis^ axisY = chartArea->AxisY;
+
+		// --- Convert Pixels to Axis Values ---
 		double startXVal, startYVal, endXVal, endYVal;
 		try {
 			startXVal = axisX->PixelPositionToValue(startPt.X);
@@ -1579,7 +1750,12 @@ private: System::Void chart_CandlestickChart_MouseUp(System::Object^ sender, Sys
 			endXVal = axisX->PixelPositionToValue(endPt.X);
 			endYVal = axisY->PixelPositionToValue(endPt.Y);
 
-			// *** STORE ACTIVE WAVE INFO ***
+			// Check for NaN results from conversion
+			if (Double::IsNaN(startXVal) || Double::IsNaN(startYVal) || Double::IsNaN(endXVal) || Double::IsNaN(endYVal)) {
+				throw gcnew ArgumentException("Pixel to value conversion resulted in NaN.");
+			}
+
+			// --- Store Active Wave Info ---
 			activeWaveDefined = true;
 			activeWaveStartXVal = startXVal;
 			activeWaveStartYVal = startYVal;
@@ -1587,24 +1763,31 @@ private: System::Void chart_CandlestickChart_MouseUp(System::Object^ sender, Sys
 			activeWaveBaseEndYVal = endYVal; // Store the originally drawn end Y
 			activeWaveCurrentEndYVal = endYVal; // Initialize current Y
 
-			// Final draw
+			// --- Final Draw ---
 			DrawFibRetracement(startXVal, startYVal, endXVal, endYVal);
 
-			// Calculate bounds for confirmation check
+			// --- Calculate Bounds for Confirmation Check ---
 			double minXVal = Math::Min(startXVal, endXVal);
 			double maxXVal = Math::Max(startXVal, endXVal);
-			double minYVal = Math::Min(startYVal, endYVal);
+			double minYVal = Math::Min(startYVal, endYVal); // Use absolute min/max of start/end
 			double maxYVal = Math::Max(startYVal, endYVal);
 
-			// Calculate and show confirmations
-			int confirmationCount = CalculateAndShowConfirmations(minXVal, maxXVal, minYVal, maxYVal);
+			// --- Calculate, Show Confirmations, Update TextBox ---
+			// Ensure calculated bounds are valid
+			if (!Double::IsNaN(minXVal) && !Double::IsNaN(maxXVal) && !Double::IsNaN(minYVal) && !Double::IsNaN(maxYVal))
+			{
+				int confirmationCount = CalculateAndShowConfirmations(minXVal, maxXVal, minYVal, maxYVal);
+				if (textBox_confirmations != nullptr) {
+					textBox_confirmations->Text = confirmationCount.ToString();
+				}
+			}
+			else {
+				if (textBox_confirmations != nullptr) textBox_confirmations->Text = "Error";
+			}
+			// MessageBox::Show("Fibonacci Confirmations within selection: " + confirmationCount, ...); // Optional
 
-			this->textBox_confirmations->Text = confirmationCount.ToString();
 
-			MessageBox::Show("Fibonacci Confirmations within selection: " + confirmationCount,
-				"Confirmation Count", MessageBoxButtons::OK, MessageBoxIcon::Information);
-
-			// *** ENABLE CONTROLS ***
+			// --- Enable Controls ---
 			button_SimulateStartStop->Enabled = true;
 			button_StepUp->Enabled = true;
 			button_StepDown->Enabled = true;
@@ -1612,32 +1795,27 @@ private: System::Void chart_CandlestickChart_MouseUp(System::Object^ sender, Sys
 			scrollBar_SimMaxPercent->Enabled = true;
 			textBox_StepSizePercent->Enabled = true;
 
-
 		}
-		catch (ArgumentException^) {
-			ClearRetracementVisuals(); // Clear if conversion failed
-		}
-	}
-	else if (rubberBandSelection != nullptr && !rubberBandSelection->IsSelecting) {
-		// If mouse up happens without selecting (just a click), ensure controls are potentially disabled
-		// (Though MouseDown should handle clearing/disabling mostly)
-		if (!activeWaveDefined) {
-			button_SimulateStartStop->Enabled = false;
-			button_StepUp->Enabled = false;
-			button_StepDown->Enabled = false;
-			scrollBar_SimMinPercent->Enabled = false;
-			scrollBar_SimMaxPercent->Enabled = false;
-			textBox_StepSizePercent->Enabled = false;
+		catch (Exception^ ex) { // Catch conversion errors or others
+			System::Diagnostics::Debug::WriteLine("Error during MouseUp processing: " + ex->Message);
+			ClearRetracementVisuals(); // Clear potentially inconsistent visuals
+			if (textBox_confirmations != nullptr) textBox_confirmations->Text = "Error";
 		}
 	}
 }
+
 private: System::Void simulationTimer_Tick(System::Object^ sender, System::EventArgs^ e) {
 	if (!isSimulating || !activeWaveDefined) {
 		StopSimulation(); // Stop if state is inconsistent
 		return;
 	}
 
-	// Calculate next step
+	// Calculate next step only if step size is valid
+	if (Math::Abs(stepSizeAxisUnits) <= Double::Epsilon) {
+		System::Diagnostics::Debug::WriteLine("Simulation step size is zero or invalid.");
+		StopSimulation();
+		return;
+	}
 	activeWaveCurrentEndYVal += (stepSizeAxisUnits * currentSimDirection);
 
 	// Check bounds and reverse direction if needed
@@ -1654,16 +1832,43 @@ private: System::Void simulationTimer_Tick(System::Object^ sender, System::Event
 	}
 
 	// Draw the updated retracement
-	DrawFibRetracement(activeWaveStartXVal, activeWaveStartYVal, activeWaveEndXVal, activeWaveCurrentEndYVal);
+	// Check if dependent values are valid before drawing
+	if (!Double::IsNaN(activeWaveStartXVal) && !Double::IsNaN(activeWaveStartYVal) &&
+		!Double::IsNaN(activeWaveEndXVal) && !Double::IsNaN(activeWaveCurrentEndYVal))
+	{
+		DrawFibRetracement(activeWaveStartXVal, activeWaveStartYVal, activeWaveEndXVal, activeWaveCurrentEndYVal);
+	}
+	else {
+		System::Diagnostics::Debug::WriteLine("Skipping draw in timer tick due to NaN coordinates.");
+		StopSimulation(); // Stop if coordinates became invalid
+		return;
+	}
+
 
 	// Update confirmations based on the *new* end Y value
 	double finalMinY = Math::Min(activeWaveStartYVal, activeWaveCurrentEndYVal);
 	double finalMaxY = Math::Max(activeWaveStartYVal, activeWaveCurrentEndYVal);
-	CalculateAndShowConfirmations(activeWaveStartXVal, finalMaxY, finalMinY, finalMaxY); // Min/Max X are fixed
+	// Use fixed start/end X for horizontal bounds during simulation/stepping
+	double fixedMinX = Math::Min(activeWaveStartXVal, activeWaveEndXVal);
+	double fixedMaxX = Math::Max(activeWaveStartXVal, activeWaveEndXVal);
 
-	// Optional: Stop simulation on reversal if desired, otherwise it bounces
+	// Ensure calculated bounds are valid numbers before checking confirmations
+	if (!Double::IsNaN(fixedMinX) && !Double::IsNaN(fixedMaxX) && !Double::IsNaN(finalMinY) && !Double::IsNaN(finalMaxY))
+	{
+		int count = CalculateAndShowConfirmations(fixedMinX, fixedMaxX, finalMinY, finalMaxY);
+		if (textBox_confirmations != nullptr) { // Check textbox exists
+			textBox_confirmations->Text = count.ToString();
+		}
+	}
+	else {
+		System::Diagnostics::Debug::WriteLine("Skipping confirmation check in timer tick due to NaN bounds.");
+		if (textBox_confirmations != nullptr) textBox_confirmations->Text = "Error"; // Indicate issue
+	}
+
+	// Optional: Stop simulation on reversal if desired
 	// if (reversed) { StopSimulation(); }
 }
+
 private: System::Void button_SimulateStartStop_Click(System::Object^ sender, System::EventArgs^ e) {
 	if (!activeWaveDefined) {
 		MessageBox::Show("Please select a wave or draw a selection first.", "No Wave Active", MessageBoxButtons::OK, MessageBoxIcon::Warning);
@@ -1677,30 +1882,80 @@ private: System::Void button_SimulateStartStop_Click(System::Object^ sender, Sys
 		StartSimulation();
 	}
 }
+	   // --- Step Up (+) Button ---
 private: System::Void button_StepUp_Click(System::Object^ sender, System::EventArgs^ e) {
 	if (isSimulating || !activeWaveDefined) return; // Don't allow manual step during simulation
 
 	if (CalculateStepSize()) { // Calculate step size based on current settings
 		activeWaveCurrentEndYVal += stepSizeAxisUnits;
 		// Optional: Add clamping if needed beyond simulation bounds
-		// Draw and update confirmations
-		DrawFibRetracement(activeWaveStartXVal, activeWaveStartYVal, activeWaveEndXVal, activeWaveCurrentEndYVal);
-		double finalMinY = Math::Min(activeWaveStartYVal, activeWaveCurrentEndYVal);
-		double finalMaxY = Math::Max(activeWaveStartYVal, activeWaveCurrentEndYVal);
-		CalculateAndShowConfirmations(activeWaveStartXVal, finalMaxY, finalMinY, finalMaxY);
+		// Example clamping: activeWaveCurrentEndYVal = Math::Min(activeWaveCurrentEndYVal, some_upper_limit);
+
+		// Check if coordinates are valid before drawing/calculating
+		if (!Double::IsNaN(activeWaveStartXVal) && !Double::IsNaN(activeWaveStartYVal) &&
+			!Double::IsNaN(activeWaveEndXVal) && !Double::IsNaN(activeWaveCurrentEndYVal))
+		{
+			// Draw and update confirmations
+			DrawFibRetracement(activeWaveStartXVal, activeWaveStartYVal, activeWaveEndXVal, activeWaveCurrentEndYVal);
+			double finalMinY = Math::Min(activeWaveStartYVal, activeWaveCurrentEndYVal);
+			double finalMaxY = Math::Max(activeWaveStartYVal, activeWaveCurrentEndYVal);
+			double fixedMinX = Math::Min(activeWaveStartXVal, activeWaveEndXVal);
+			double fixedMaxX = Math::Max(activeWaveStartXVal, activeWaveEndXVal);
+			// Ensure bounds are valid before calculating
+			if (!Double::IsNaN(fixedMinX) && !Double::IsNaN(fixedMaxX) && !Double::IsNaN(finalMinY) && !Double::IsNaN(finalMaxY))
+			{
+				int count = CalculateAndShowConfirmations(fixedMinX, fixedMaxX, finalMinY, finalMaxY);
+				if (textBox_confirmations != nullptr) {
+					textBox_confirmations->Text = count.ToString();
+				}
+			}
+			else {
+				if (textBox_confirmations != nullptr) textBox_confirmations->Text = "Error";
+			}
+		}
+		else {
+			System::Diagnostics::Debug::WriteLine("Skipping Step Up due to NaN coordinates.");
+			if (textBox_confirmations != nullptr) textBox_confirmations->Text = "Error";
+		}
 	}
 }
+
+
+	   // --- Step Down (-) Button ---
 private: System::Void button_StepDown_Click(System::Object^ sender, System::EventArgs^ e) {
 	if (isSimulating || !activeWaveDefined) return; // Don't allow manual step during simulation
 
 	if (CalculateStepSize()) { // Calculate step size based on current settings
 		activeWaveCurrentEndYVal -= stepSizeAxisUnits;
 		// Optional: Add clamping if needed beyond simulation bounds
-		// Draw and update confirmations
-		DrawFibRetracement(activeWaveStartXVal, activeWaveStartYVal, activeWaveEndXVal, activeWaveCurrentEndYVal);
-		double finalMinY = Math::Min(activeWaveStartYVal, activeWaveCurrentEndYVal);
-		double finalMaxY = Math::Max(activeWaveStartYVal, activeWaveCurrentEndYVal);
-		CalculateAndShowConfirmations(activeWaveStartXVal, finalMaxY, finalMinY, finalMaxY);
+		// Example clamping: activeWaveCurrentEndYVal = Math::Max(activeWaveCurrentEndYVal, some_lower_limit);
+
+		// Check if coordinates are valid before drawing/calculating
+		if (!Double::IsNaN(activeWaveStartXVal) && !Double::IsNaN(activeWaveStartYVal) &&
+			!Double::IsNaN(activeWaveEndXVal) && !Double::IsNaN(activeWaveCurrentEndYVal))
+		{
+			// Draw and update confirmations
+			DrawFibRetracement(activeWaveStartXVal, activeWaveStartYVal, activeWaveEndXVal, activeWaveCurrentEndYVal);
+			double finalMinY = Math::Min(activeWaveStartYVal, activeWaveCurrentEndYVal);
+			double finalMaxY = Math::Max(activeWaveStartYVal, activeWaveCurrentEndYVal);
+			double fixedMinX = Math::Min(activeWaveStartXVal, activeWaveEndXVal);
+			double fixedMaxX = Math::Max(activeWaveStartXVal, activeWaveEndXVal);
+			// Ensure bounds are valid before calculating
+			if (!Double::IsNaN(fixedMinX) && !Double::IsNaN(fixedMaxX) && !Double::IsNaN(finalMinY) && !Double::IsNaN(finalMaxY))
+			{
+				int count = CalculateAndShowConfirmations(fixedMinX, fixedMaxX, finalMinY, finalMaxY);
+				if (textBox_confirmations != nullptr) {
+					textBox_confirmations->Text = count.ToString();
+				}
+			}
+			else {
+				if (textBox_confirmations != nullptr) textBox_confirmations->Text = "Error";
+			}
+		}
+		else {
+			System::Diagnostics::Debug::WriteLine("Skipping Step Down due to NaN coordinates.");
+			if (textBox_confirmations != nullptr) textBox_confirmations->Text = "Error";
+		}
 	}
 }
 
