@@ -46,12 +46,45 @@ namespace CppCLRWinFormsProject {
 	private: System::Windows::Forms::Button^ button_SimulateStartStop;
 
 	private: System::Windows::Forms::Timer^ simulationTimer;
+	private: System::Windows::Forms::HScrollBar^ scrollBar_SimMinPercent;
+	private: System::Windows::Forms::HScrollBar^ scrollBar_SimMaxPercent;
+	private: System::Windows::Forms::Label^ label_SimMinPercentValue;
+	private: System::Windows::Forms::Label^ label_SimMaxPercentValue;
+	private: System::Windows::Forms::Label^ label_StepPercentage;
+	private: System::Windows::Forms::TextBox^ textBox_StepSizePercent;
 
-		   static array<String^>^ fibLevelStrings = gcnew array<String^>{ "0.0%", "23.6%", "38.2%", "50.0%", "61.8%", "76.4%", "100.0%" };
+
+	static array<String^>^ fibLevelStrings = gcnew array<String^>{ "0.0%", "23.6%", "38.2%", "50.0%", "61.8%", "76.4%", "100.0%" };
+	
+	// *** Simulation and Stepping State Variables ***
+	private:
+		bool isSimulating;                  // Is the timer running?
+		bool activeWaveDefined;             // Is there a wave selected/drawn to simulate/step?
+		double activeWaveStartXVal;         // X-axis value of the starting point
+		double activeWaveStartYVal;         // Y-axis value of the starting point (for diagonal)
+		double activeWaveEndXVal;           // X-axis value of the ending point
+		double activeWaveBaseEndYVal;       // Original Y-axis value of the ending point
+		double activeWaveCurrentEndYVal;    // Current Y-axis value during simulation/stepping
+		double simMinYVal;                  // Calculated Min Y for simulation range
+		double simMaxYVal;                  // Calculated Max Y for simulation range
+		double stepSizeAxisUnits;           // Step size calculated in axis units
+		double currentSimDirection;         // +1 or -1 for simulation direction
 
 	public:
 		Form_UI(void) { //
 			InitializeComponent(); //
+			isSimulating = false;
+			activeWaveDefined = false;
+			// Disable controls initially (can also be done in designer)
+			button_SimulateStartStop->Enabled = false;
+			button_StepUp->Enabled = false;
+			button_StepDown->Enabled = false;
+			scrollBar_SimMinPercent->Enabled = false;
+			scrollBar_SimMaxPercent->Enabled = false;
+			textBox_StepSizePercent->Enabled = false;
+			// Initialize labels for scrollbars
+			label_SimMinPercentValue->Text = scrollBar_SimMinPercent->Value.ToString() + "%";
+			label_SimMaxPercentValue->Text = scrollBar_SimMaxPercent->Value.ToString() + "%";
 			rubberBandSelection = gcnew RubberBandSelection(); //
 			InitializeAnnotations(); // Call the new initializer
 		}
@@ -59,6 +92,18 @@ namespace CppCLRWinFormsProject {
 		Form_UI(String^ filepath, DateTime startDate, DateTime endDate) //
 		{
 			InitializeComponent(); //
+			isSimulating = false;
+			activeWaveDefined = false;
+			// Disable controls initially (can also be done in designer)
+			button_SimulateStartStop->Enabled = false;
+			button_StepUp->Enabled = false;
+			button_StepDown->Enabled = false;
+			scrollBar_SimMinPercent->Enabled = false;
+			scrollBar_SimMaxPercent->Enabled = false;
+			textBox_StepSizePercent->Enabled = false;
+			// Initialize labels for scrollbars
+			label_SimMinPercentValue->Text = scrollBar_SimMinPercent->Value.ToString() + "%";
+			label_SimMaxPercentValue->Text = scrollBar_SimMaxPercent->Value.ToString() + "%";
 			this->filePath = filepath; //
 			dateTimePicker_startDate->Value = startDate; //
 			candlesticks = StockReader::ReadFromCSV(filepath); //
@@ -172,18 +217,33 @@ namespace CppCLRWinFormsProject {
 	}
 
 	void ClearRetracementVisuals() {
-		if (selectionRectAnnotation != nullptr) selectionRectAnnotation->Visible = false;
-		if (diagonalLineAnnotation != nullptr) diagonalLineAnnotation->Visible = false;
-		if (fibLineAnnotations != nullptr) {
-			for each (HorizontalLineAnnotation ^ line in fibLineAnnotations) if (line != nullptr) line->Visible = false;
+		// Stop simulation if it's running when visuals are cleared
+		if (isSimulating) {
+			StopSimulation();
 		}
-		if (fibLabelAnnotations != nullptr) {
-			for each (TextAnnotation ^ label in fibLabelAnnotations) if (label != nullptr) label->Visible = false;
+		// Reset active wave state
+		activeWaveDefined = false;
+
+		// Hide annotations and clear markers (existing code)
+		try {
+			if (selectionRectAnnotation != nullptr) selectionRectAnnotation->Visible = false;
+			if (diagonalLineAnnotation != nullptr) diagonalLineAnnotation->Visible = false;
+			// ... (rest of annotation hiding) ...
+			if (chart_CandlestickChart != nullptr && chart_CandlestickChart->Series != nullptr && chart_CandlestickChart->Series->IndexOf("Confirmations") != -1) {
+				chart_CandlestickChart->Series["Confirmations"]->Points->Clear();
+			}
 		}
-		// Clear confirmation markers
-		if (chart_CandlestickChart->Series->IndexOf("Confirmations") != -1) {
-			chart_CandlestickChart->Series["Confirmations"]->Points->Clear();
+		catch (Exception^ ex) {
+			System::Diagnostics::Debug::WriteLine("Error in ClearRetracementVisuals: " + ex->Message);
 		}
+
+		// Disable simulation/stepping controls as no wave is active
+		button_SimulateStartStop->Enabled = false;
+		button_StepUp->Enabled = false;
+		button_StepDown->Enabled = false;
+		scrollBar_SimMinPercent->Enabled = false;
+		scrollBar_SimMaxPercent->Enabled = false;
+		textBox_StepSizePercent->Enabled = false;
 	}
 
 	// *** NEW: Calculates Confirmations and Plots Markers ***
@@ -327,6 +387,12 @@ private: System::ComponentModel::IContainer^ components;
 			this->button_StepDown = (gcnew System::Windows::Forms::Button());
 			this->button_SimulateStartStop = (gcnew System::Windows::Forms::Button());
 			this->simulationTimer = (gcnew System::Windows::Forms::Timer(this->components));
+			this->scrollBar_SimMinPercent = (gcnew System::Windows::Forms::HScrollBar());
+			this->scrollBar_SimMaxPercent = (gcnew System::Windows::Forms::HScrollBar());
+			this->label_SimMinPercentValue = (gcnew System::Windows::Forms::Label());
+			this->label_SimMaxPercentValue = (gcnew System::Windows::Forms::Label());
+			this->label_StepPercentage = (gcnew System::Windows::Forms::Label());
+			this->textBox_StepSizePercent = (gcnew System::Windows::Forms::TextBox());
 			(cli::safe_cast<System::ComponentModel::ISupportInitialize^>(this->chart_CandlestickChart))->BeginInit();
 			this->SuspendLayout();
 			// 
@@ -470,7 +536,7 @@ private: System::ComponentModel::IContainer^ components;
 			// comboBox_downwardWaves
 			// 
 			this->comboBox_downwardWaves->FormattingEnabled = true;
-			this->comboBox_downwardWaves->Location = System::Drawing::Point(787, 283);
+			this->comboBox_downwardWaves->Location = System::Drawing::Point(787, 239);
 			this->comboBox_downwardWaves->Name = L"comboBox_downwardWaves";
 			this->comboBox_downwardWaves->Size = System::Drawing::Size(244, 21);
 			this->comboBox_downwardWaves->TabIndex = 10;
@@ -488,7 +554,7 @@ private: System::ComponentModel::IContainer^ components;
 			// label_downwardComboBox
 			// 
 			this->label_downwardComboBox->AutoSize = true;
-			this->label_downwardComboBox->Location = System::Drawing::Point(787, 255);
+			this->label_downwardComboBox->Location = System::Drawing::Point(784, 214);
 			this->label_downwardComboBox->Name = L"label_downwardComboBox";
 			this->label_downwardComboBox->Size = System::Drawing::Size(95, 13);
 			this->label_downwardComboBox->TabIndex = 12;
@@ -506,7 +572,7 @@ private: System::ComponentModel::IContainer^ components;
 			// 
 			// textBox_confirmations
 			// 
-			this->textBox_confirmations->Location = System::Drawing::Point(787, 624);
+			this->textBox_confirmations->Location = System::Drawing::Point(860, 390);
 			this->textBox_confirmations->Name = L"textBox_confirmations";
 			this->textBox_confirmations->Size = System::Drawing::Size(100, 20);
 			this->textBox_confirmations->TabIndex = 14;
@@ -514,7 +580,7 @@ private: System::ComponentModel::IContainer^ components;
 			// label_confirmations
 			// 
 			this->label_confirmations->AutoSize = true;
-			this->label_confirmations->Location = System::Drawing::Point(787, 590);
+			this->label_confirmations->Location = System::Drawing::Point(784, 393);
 			this->label_confirmations->Name = L"label_confirmations";
 			this->label_confirmations->Size = System::Drawing::Size(70, 13);
 			this->label_confirmations->TabIndex = 15;
@@ -523,37 +589,105 @@ private: System::ComponentModel::IContainer^ components;
 			// button_StepUp
 			// 
 			this->button_StepUp->Enabled = false;
-			this->button_StepUp->Location = System::Drawing::Point(787, 477);
+			this->button_StepUp->Location = System::Drawing::Point(774, 428);
 			this->button_StepUp->Name = L"button_StepUp";
 			this->button_StepUp->Size = System::Drawing::Size(49, 47);
 			this->button_StepUp->TabIndex = 16;
 			this->button_StepUp->Text = L"+";
 			this->button_StepUp->UseVisualStyleBackColor = true;
+			this->button_StepUp->Click += gcnew System::EventHandler(this, &Form_UI::button_StepUp_Click);
 			// 
 			// button_StepDown
 			// 
 			this->button_StepDown->Enabled = false;
-			this->button_StepDown->Location = System::Drawing::Point(854, 477);
+			this->button_StepDown->Location = System::Drawing::Point(841, 428);
 			this->button_StepDown->Name = L"button_StepDown";
 			this->button_StepDown->Size = System::Drawing::Size(49, 47);
 			this->button_StepDown->TabIndex = 17;
 			this->button_StepDown->Text = L"-";
 			this->button_StepDown->UseVisualStyleBackColor = true;
+			this->button_StepDown->Click += gcnew System::EventHandler(this, &Form_UI::button_StepDown_Click);
 			// 
 			// button_SimulateStartStop
 			// 
-			this->button_SimulateStartStop->Location = System::Drawing::Point(924, 477);
+			this->button_SimulateStartStop->Location = System::Drawing::Point(911, 428);
 			this->button_SimulateStartStop->Name = L"button_SimulateStartStop";
 			this->button_SimulateStartStop->Size = System::Drawing::Size(49, 47);
 			this->button_SimulateStartStop->TabIndex = 18;
-			this->button_SimulateStartStop->Text = L"S/S";
+			this->button_SimulateStartStop->Text = L"Start";
 			this->button_SimulateStartStop->UseVisualStyleBackColor = true;
+			this->button_SimulateStartStop->Click += gcnew System::EventHandler(this, &Form_UI::button_SimulateStartStop_Click);
+			// 
+			// simulationTimer
+			// 
+			this->simulationTimer->Tick += gcnew System::EventHandler(this, &Form_UI::simulationTimer_Tick);
+			// 
+			// scrollBar_SimMinPercent
+			// 
+			this->scrollBar_SimMinPercent->Enabled = false;
+			this->scrollBar_SimMinPercent->Location = System::Drawing::Point(860, 519);
+			this->scrollBar_SimMinPercent->Name = L"scrollBar_SimMinPercent";
+			this->scrollBar_SimMinPercent->Size = System::Drawing::Size(80, 17);
+			this->scrollBar_SimMinPercent->TabIndex = 19;
+			this->scrollBar_SimMinPercent->Scroll += gcnew System::Windows::Forms::ScrollEventHandler(this, &Form_UI::scrollBar_SimPercent_Scroll);
+			// 
+			// scrollBar_SimMaxPercent
+			// 
+			this->scrollBar_SimMaxPercent->Enabled = false;
+			this->scrollBar_SimMaxPercent->Location = System::Drawing::Point(860, 568);
+			this->scrollBar_SimMaxPercent->Name = L"scrollBar_SimMaxPercent";
+			this->scrollBar_SimMaxPercent->Size = System::Drawing::Size(80, 17);
+			this->scrollBar_SimMaxPercent->TabIndex = 20;
+			this->scrollBar_SimMaxPercent->Scroll += gcnew System::Windows::Forms::ScrollEventHandler(this, &Form_UI::scrollBar_SimPercent_Scroll);
+			// 
+			// label_SimMinPercentValue
+			// 
+			this->label_SimMinPercentValue->AutoSize = true;
+			this->label_SimMinPercentValue->Location = System::Drawing::Point(777, 519);
+			this->label_SimMinPercentValue->Name = L"label_SimMinPercentValue";
+			this->label_SimMinPercentValue->Size = System::Drawing::Size(27, 13);
+			this->label_SimMinPercentValue->TabIndex = 21;
+			this->label_SimMinPercentValue->Text = L"10%";
+			// 
+			// label_SimMaxPercentValue
+			// 
+			this->label_SimMaxPercentValue->AutoSize = true;
+			this->label_SimMaxPercentValue->Location = System::Drawing::Point(777, 568);
+			this->label_SimMaxPercentValue->Name = L"label_SimMaxPercentValue";
+			this->label_SimMaxPercentValue->Size = System::Drawing::Size(27, 13);
+			this->label_SimMaxPercentValue->TabIndex = 22;
+			this->label_SimMaxPercentValue->Text = L"10%";
+			// 
+			// label_StepPercentage
+			// 
+			this->label_StepPercentage->AutoSize = true;
+			this->label_StepPercentage->Location = System::Drawing::Point(780, 609);
+			this->label_StepPercentage->Name = L"label_StepPercentage";
+			this->label_StepPercentage->Size = System::Drawing::Size(49, 13);
+			this->label_StepPercentage->TabIndex = 23;
+			this->label_StepPercentage->Text = L"Step (%):";
+			// 
+			// textBox_StepSizePercent
+			// 
+			this->textBox_StepSizePercent->Enabled = false;
+			this->textBox_StepSizePercent->Location = System::Drawing::Point(860, 605);
+			this->textBox_StepSizePercent->Name = L"textBox_StepSizePercent";
+			this->textBox_StepSizePercent->Size = System::Drawing::Size(100, 20);
+			this->textBox_StepSizePercent->TabIndex = 24;
+			this->textBox_StepSizePercent->Text = L"1.0";
+			this->textBox_StepSizePercent->TextChanged += gcnew System::EventHandler(this, &Form_UI::textBox_StepSizePercent_TextChanged);
 			// 
 			// Form_UI
 			// 
 			this->AutoScaleDimensions = System::Drawing::SizeF(6, 13);
 			this->AutoScaleMode = System::Windows::Forms::AutoScaleMode::Font;
 			this->ClientSize = System::Drawing::Size(1043, 656);
+			this->Controls->Add(this->textBox_StepSizePercent);
+			this->Controls->Add(this->label_StepPercentage);
+			this->Controls->Add(this->label_SimMaxPercentValue);
+			this->Controls->Add(this->label_SimMinPercentValue);
+			this->Controls->Add(this->scrollBar_SimMaxPercent);
+			this->Controls->Add(this->scrollBar_SimMinPercent);
 			this->Controls->Add(this->button_SimulateStartStop);
 			this->Controls->Add(this->button_StepDown);
 			this->Controls->Add(this->button_StepUp);
@@ -907,51 +1041,72 @@ private: System::ComponentModel::IContainer^ components;
 		return candlesticks;
 	}
 	// *** Handles wave selection from either ComboBox ***
-	void HandleWaveSelection(Wave^ selectedWave) {
-		ClearRetracementVisuals(); // Clear any manual selection first
+		   void HandleWaveSelection(Wave^ selectedWave) {
+			   // Stop any ongoing simulation first
+			   StopSimulation();
+			   ClearRetracementVisuals();
 
-		if (selectedWave == nullptr || selectedWave->pv1 == nullptr || selectedWave->pv2 == nullptr ||
-			chart_CandlestickChart->Series["Series_OHLC"] == nullptr || filteredCandlesticks == nullptr) {
-			return; // Cannot process if wave or data is invalid
-		}
+			   if (selectedWave == nullptr || selectedWave->pv1 == nullptr || selectedWave->pv2 == nullptr ||
+				   chart_CandlestickChart->Series["Series_OHLC"] == nullptr || filteredCandlesticks == nullptr) {
+				   activeWaveDefined = false; // Ensure flag is false if wave is invalid
+				   // Disable controls if no valid wave selected
+				   button_SimulateStartStop->Enabled = false;
+				   button_StepUp->Enabled = false;
+				   button_StepDown->Enabled = false;
+				   scrollBar_SimMinPercent->Enabled = false;
+				   scrollBar_SimMaxPercent->Enabled = false;
+				   textBox_StepSizePercent->Enabled = false;
+				   return;
+			   }
 
-		int idx1 = selectedWave->pv1->index;
-		int idx2 = selectedWave->pv2->index;
+			   int idx1 = selectedWave->pv1->index;
+			   int idx2 = selectedWave->pv2->index;
+			   int pointCount = chart_CandlestickChart->Series["Series_OHLC"]->Points->Count;
+			   int filteredCount = filteredCandlesticks->Count;
+			   if (idx1 < 0 || idx1 >= pointCount || idx2 < 0 || idx2 >= pointCount || idx1 >= filteredCount || idx2 >= filteredCount) {
+				   activeWaveDefined = false; // Ensure flag is false if indices are invalid
+				   // Disable controls
+				   button_SimulateStartStop->Enabled = false; // etc.
+				   return;
+			   }
 
-		// Ensure indices are valid for the OHLC series points
-		int pointCount = chart_CandlestickChart->Series["Series_OHLC"]->Points->Count;
-		if (idx1 < 0 || idx1 >= pointCount || idx2 < 0 || idx2 >= pointCount) return;
+			   DataPoint^ dpStart = chart_CandlestickChart->Series["Series_OHLC"]->Points[idx1];
+			   DataPoint^ dpEnd = chart_CandlestickChart->Series["Series_OHLC"]->Points[idx2];
+			   double yVal1 = selectedWave->pv1->IsPeak ? filteredCandlesticks[idx1]->High : filteredCandlesticks[idx1]->Low;
+			   double yVal2 = selectedWave->pv2->IsPeak ? filteredCandlesticks[idx2]->High : filteredCandlesticks[idx2]->Low;
 
-		// Ensure indices are valid for the filteredCandlesticks list (used for Y values)
-		int filteredCount = filteredCandlesticks->Count;
-		if (idx1 >= filteredCount || idx2 >= filteredCount) return; // Index mismatch
+			   // *** STORE ACTIVE WAVE INFO ***
+			   activeWaveDefined = true;
+			   activeWaveStartXVal = dpStart->XValue;
+			   activeWaveStartYVal = yVal1; // Start Y is defined by the first PV's value
+			   activeWaveEndXVal = dpEnd->XValue;
+			   activeWaveBaseEndYVal = yVal2; // Store the wave's defined end Y
+			   activeWaveCurrentEndYVal = yVal2; // Initialize current Y
 
+			   // Initial Draw
+			   DrawFibRetracement(activeWaveStartXVal, activeWaveStartYVal, activeWaveEndXVal, activeWaveCurrentEndYVal);
 
-		// Get the specific start/end points for the diagonal line
-		DataPoint^ dpStart = chart_CandlestickChart->Series["Series_OHLC"]->Points[idx1];
-		DataPoint^ dpEnd = chart_CandlestickChart->Series["Series_OHLC"]->Points[idx2];
+			   // Calculate bounds for confirmation check
+			   double minXVal = Math::Min(activeWaveStartXVal, activeWaveEndXVal);
+			   double maxXVal = Math::Max(activeWaveStartXVal, activeWaveEndXVal);
+			   double minYVal = Math::Min(activeWaveStartYVal, activeWaveCurrentEndYVal); // Use current (which is base initially)
+			   double maxYVal = Math::Max(activeWaveStartYVal, activeWaveCurrentEndYVal);
 
-		// Get the corresponding Y values from the filtered candlesticks for the wave definition
-		// Note: We need the HIGH/LOW values corresponding to the PV points for Fib range
-		double yVal1 = selectedWave->pv1->IsPeak ? filteredCandlesticks[idx1]->High : filteredCandlesticks[idx1]->Low;
-		double yVal2 = selectedWave->pv2->IsPeak ? filteredCandlesticks[idx2]->High : filteredCandlesticks[idx2]->Low;
+			   // Calculate and show confirmations for the selected wave
+			   int confirmationCount = CalculateAndShowConfirmations(minXVal, maxXVal, minYVal, maxYVal);
+			   // Display count differently for combo selection
+			   this->textBox_confirmations->Text = confirmationCount.ToString();
+			    
+			   // MessageBox::Show("Confirmations for selected wave: " + confirmationCount, ...);
 
-		// Draw the retracement using the X values from datapoints and Y values from wave definition
-		DrawFibRetracement(dpStart->XValue, yVal1, dpEnd->XValue, yVal2);
-
-		// Calculate bounds for confirmation check
-		double minXVal = Math::Min(dpStart->XValue, dpEnd->XValue);
-		double maxXVal = Math::Max(dpStart->XValue, dpEnd->XValue);
-		double minYVal = Math::Min(yVal1, yVal2); // Use the actual Y values defining the wave range
-		double maxYVal = Math::Max(yVal1, yVal2);
-
-		// Calculate and show confirmations for the selected wave
-		int confirmationCount = CalculateAndShowConfirmations(minXVal, maxXVal, minYVal, maxYVal);
-
-		// Display count (optional, maybe update a label instead of MessageBox for combo selection)
-		this->textBox_confirmations->Text = confirmationCount.ToString();
-		// MessageBox::Show("Confirmations for selected wave: " + confirmationCount, ...);
-	}
+			   // *** ENABLE CONTROLS ***
+			   button_SimulateStartStop->Enabled = true;
+			   button_StepUp->Enabled = true;
+			   button_StepDown->Enabled = true;
+			   scrollBar_SimMinPercent->Enabled = true;
+			   scrollBar_SimMaxPercent->Enabled = true;
+			   textBox_StepSizePercent->Enabled = true;
+		   }
 
 	// The display function takes care of setting up the info and displaying everything on the chart
 	private: List<Candlestick^>^ display(String^ fileName) {
@@ -1157,6 +1312,126 @@ private: System::Void button_updateButton_Click(System::Object^ sender, System::
 	}
 }
 
+// Helper methods for simulation
+private:
+	// --- Calculates absolute step size in axis units ---
+	bool CalculateStepSize() {
+		if (!activeWaveDefined) return false;
+
+		double stepPercent;
+		if (!Double::TryParse(textBox_StepSizePercent->Text, stepPercent) || stepPercent <= 0) {
+			MessageBox::Show("Invalid Step Size percentage.", "Error", MessageBoxButtons::OK, MessageBoxIcon::Warning);
+			return false;
+		}
+
+		double totalHeight = Math::Abs(activeWaveBaseEndYVal - activeWaveStartYVal); // Use original height
+		if (totalHeight <= Double::Epsilon) {
+			// Avoid division by zero or tiny steps if initial wave has no height
+			// Use a small absolute value based on axis range?
+			if (chart_CandlestickChart->ChartAreas->Count > 0 && chart_CandlestickChart->ChartAreas[0]->AxisY != nullptr) {
+				Axis^ axisY = chart_CandlestickChart->ChartAreas[0]->AxisY;
+				stepSizeAxisUnits = (axisY->Maximum - axisY->Minimum) * 0.005; // 0.5% of axis range
+			}
+			else {
+				stepSizeAxisUnits = 0.1; // Fallback absolute step
+			}
+		}
+		else {
+			stepSizeAxisUnits = totalHeight * (stepPercent / 100.0);
+		}
+		return stepSizeAxisUnits > Double::Epsilon; // Ensure step is positive
+	}
+
+
+	// --- Starts the simulation ---
+	void StartSimulation() {
+		if (!activeWaveDefined || !CalculateStepSize()) { // Ensure wave is defined and step size is valid
+			StopSimulation(); // Make sure UI is in stopped state
+			return;
+		}
+
+		// Calculate original wave height
+		double totalHeight = Math::Abs(activeWaveBaseEndYVal - activeWaveStartYVal);
+
+		// If totalHeight is zero, simulation doesn't make sense.
+		if (totalHeight <= Double::Epsilon) {
+			MessageBox::Show("Cannot simulate wave with zero vertical height.", "Simulation Error", MessageBoxButtons::OK, MessageBoxIcon::Warning);
+			StopSimulation(); // Ensure controls are re-enabled correctly
+			return;
+		}
+
+		// --- *** MODIFIED BOUNDS CALCULATION *** ---
+		// Calculate bounds RELATIVE to the original End Y Value (activeWaveBaseEndYVal)
+		// Min % below EndY, Max % above EndY
+		double minPercent = scrollBar_SimMinPercent->Value / 100.0;
+		double maxPercent = scrollBar_SimMaxPercent->Value / 100.0;
+
+		simMinYVal = activeWaveBaseEndYVal - (totalHeight * minPercent);
+		simMaxYVal = activeWaveBaseEndYVal + (totalHeight * maxPercent);
+		// --- *** END MODIFIED BOUNDS CALCULATION *** ---
+
+
+		// Ensure Max >= Min visually (simulation still goes min to max)
+		// Although calculated relative to EndY, the simulation range itself must be valid.
+		// If maxPercent is 0% and minPercent is 10%, simMaxYVal would be < simMinYVal.
+		// In such a case, we might clamp or default, but for now, let's just ensure the simulation
+		// range itself is ordered correctly for the bouncing logic.
+		if (simMaxYVal < simMinYVal) {
+			// This could happen if Min% is large and Max% is small.
+			// Swap them for the simulation bouncing logic to work,
+			// although the percentages might feel counter-intuitive to the user.
+			// Or, show an error and don't start. Let's show an error.
+			MessageBox::Show("Max % range must result in a higher value than Min % range.", "Simulation Error", MessageBoxButtons::OK, MessageBoxIcon::Warning);
+			StopSimulation();
+			return;
+
+			// Alternative: Swap them to allow simulation anyway
+			// double temp = simMaxYVal;
+			// simMaxYVal = simMinYVal;
+			// simMinYVal = temp;
+		}
+		// Avoid zero range for simulation
+		if (Math::Abs(simMaxYVal - simMinYVal) < Double::Epsilon) {
+			MessageBox::Show("Simulation range (Min % to Max %) results in zero height. Adjust percentages.", "Simulation Error", MessageBoxButtons::OK, MessageBoxIcon::Warning);
+			StopSimulation();
+			return;
+		}
+
+
+		// Initialize state
+		isSimulating = true;
+		activeWaveCurrentEndYVal = simMinYVal; // Start simulation from the calculated minimum Y bound
+		currentSimDirection = 1.0;            // Start going up
+
+		// Update UI
+		button_SimulateStartStop->Text = "Stop";
+		button_StepUp->Enabled = false;
+		button_StepDown->Enabled = false;
+		scrollBar_SimMinPercent->Enabled = false;
+		scrollBar_SimMaxPercent->Enabled = false;
+		textBox_StepSizePercent->Enabled = false;
+
+		// Start Timer
+		simulationTimer->Enabled = true; // Ensure timer is enabled before starting
+		simulationTimer->Start();
+	}
+
+	// --- Stops the simulation ---
+	void StopSimulation() {
+		isSimulating = false;
+		simulationTimer->Stop();
+		simulationTimer->Enabled = false; // Good practice to disable
+
+		// Update UI
+		button_SimulateStartStop->Text = "Start";
+		// Only enable stepping etc. if a wave is still defined
+		bool enableControls = activeWaveDefined;
+		button_StepUp->Enabled = enableControls;
+		button_StepDown->Enabled = enableControls;
+		scrollBar_SimMinPercent->Enabled = enableControls;
+		scrollBar_SimMaxPercent->Enabled = enableControls;
+		textBox_StepSizePercent->Enabled = enableControls;
+	}
 
 
 void DrawFibRetracement(double startXVal, double startYVal, double endXVal, double endYVal)
@@ -1287,11 +1562,10 @@ private: System::Void chart_CandlestickChart_MouseUp(System::Object^ sender, Sys
 	if (rubberBandSelection != nullptr && rubberBandSelection->IsSelecting) {
 		rubberBandSelection->EndSelection(e->Location); // Sets IsSelecting = false
 
-		// --- Final Draw & Confirmation Check ---
 		Point startPt = rubberBandSelection->StartPoint;
 		Point endPt = rubberBandSelection->EndPoint;
-		if (startPt.Equals(endPt)) { // No actual selection drawn
-			ClearRetracementVisuals();
+		if (startPt.Equals(endPt)) {
+			ClearRetracementVisuals(); // Also resets activeWaveDefined
 			return;
 		}
 
@@ -1305,7 +1579,15 @@ private: System::Void chart_CandlestickChart_MouseUp(System::Object^ sender, Sys
 			endXVal = axisX->PixelPositionToValue(endPt.X);
 			endYVal = axisY->PixelPositionToValue(endPt.Y);
 
-			// Final draw using axis coordinates
+			// *** STORE ACTIVE WAVE INFO ***
+			activeWaveDefined = true;
+			activeWaveStartXVal = startXVal;
+			activeWaveStartYVal = startYVal;
+			activeWaveEndXVal = endXVal;
+			activeWaveBaseEndYVal = endYVal; // Store the originally drawn end Y
+			activeWaveCurrentEndYVal = endYVal; // Initialize current Y
+
+			// Final draw
 			DrawFibRetracement(startXVal, startYVal, endXVal, endYVal);
 
 			// Calculate bounds for confirmation check
@@ -1317,16 +1599,131 @@ private: System::Void chart_CandlestickChart_MouseUp(System::Object^ sender, Sys
 			// Calculate and show confirmations
 			int confirmationCount = CalculateAndShowConfirmations(minXVal, maxXVal, minYVal, maxYVal);
 
-			// Display count
 			this->textBox_confirmations->Text = confirmationCount.ToString();
-			// MessageBox::Show("Fibonacci Confirmations within selection: " + confirmationCount,
-			//	"Confirmation Count", MessageBoxButtons::OK, MessageBoxIcon::Information);
+
+			MessageBox::Show("Fibonacci Confirmations within selection: " + confirmationCount,
+				"Confirmation Count", MessageBoxButtons::OK, MessageBoxIcon::Information);
+
+			// *** ENABLE CONTROLS ***
+			button_SimulateStartStop->Enabled = true;
+			button_StepUp->Enabled = true;
+			button_StepDown->Enabled = true;
+			scrollBar_SimMinPercent->Enabled = true;
+			scrollBar_SimMaxPercent->Enabled = true;
+			textBox_StepSizePercent->Enabled = true;
+
 
 		}
 		catch (ArgumentException^) {
-			// Final conversion failed, ensure visuals are cleared
-			ClearRetracementVisuals();
+			ClearRetracementVisuals(); // Clear if conversion failed
 		}
+	}
+	else if (rubberBandSelection != nullptr && !rubberBandSelection->IsSelecting) {
+		// If mouse up happens without selecting (just a click), ensure controls are potentially disabled
+		// (Though MouseDown should handle clearing/disabling mostly)
+		if (!activeWaveDefined) {
+			button_SimulateStartStop->Enabled = false;
+			button_StepUp->Enabled = false;
+			button_StepDown->Enabled = false;
+			scrollBar_SimMinPercent->Enabled = false;
+			scrollBar_SimMaxPercent->Enabled = false;
+			textBox_StepSizePercent->Enabled = false;
+		}
+	}
+}
+private: System::Void simulationTimer_Tick(System::Object^ sender, System::EventArgs^ e) {
+	if (!isSimulating || !activeWaveDefined) {
+		StopSimulation(); // Stop if state is inconsistent
+		return;
+	}
+
+	// Calculate next step
+	activeWaveCurrentEndYVal += (stepSizeAxisUnits * currentSimDirection);
+
+	// Check bounds and reverse direction if needed
+	bool reversed = false;
+	if (currentSimDirection > 0 && activeWaveCurrentEndYVal >= simMaxYVal) {
+		activeWaveCurrentEndYVal = simMaxYVal; // Clamp to max
+		currentSimDirection = -1.0;        // Reverse
+		reversed = true;
+	}
+	else if (currentSimDirection < 0 && activeWaveCurrentEndYVal <= simMinYVal) {
+		activeWaveCurrentEndYVal = simMinYVal; // Clamp to min
+		currentSimDirection = 1.0;         // Reverse
+		reversed = true;
+	}
+
+	// Draw the updated retracement
+	DrawFibRetracement(activeWaveStartXVal, activeWaveStartYVal, activeWaveEndXVal, activeWaveCurrentEndYVal);
+
+	// Update confirmations based on the *new* end Y value
+	double finalMinY = Math::Min(activeWaveStartYVal, activeWaveCurrentEndYVal);
+	double finalMaxY = Math::Max(activeWaveStartYVal, activeWaveCurrentEndYVal);
+	CalculateAndShowConfirmations(activeWaveStartXVal, finalMaxY, finalMinY, finalMaxY); // Min/Max X are fixed
+
+	// Optional: Stop simulation on reversal if desired, otherwise it bounces
+	// if (reversed) { StopSimulation(); }
+}
+private: System::Void button_SimulateStartStop_Click(System::Object^ sender, System::EventArgs^ e) {
+	if (!activeWaveDefined) {
+		MessageBox::Show("Please select a wave or draw a selection first.", "No Wave Active", MessageBoxButtons::OK, MessageBoxIcon::Warning);
+		return;
+	}
+
+	if (isSimulating) {
+		StopSimulation();
+	}
+	else {
+		StartSimulation();
+	}
+}
+private: System::Void button_StepUp_Click(System::Object^ sender, System::EventArgs^ e) {
+	if (isSimulating || !activeWaveDefined) return; // Don't allow manual step during simulation
+
+	if (CalculateStepSize()) { // Calculate step size based on current settings
+		activeWaveCurrentEndYVal += stepSizeAxisUnits;
+		// Optional: Add clamping if needed beyond simulation bounds
+		// Draw and update confirmations
+		DrawFibRetracement(activeWaveStartXVal, activeWaveStartYVal, activeWaveEndXVal, activeWaveCurrentEndYVal);
+		double finalMinY = Math::Min(activeWaveStartYVal, activeWaveCurrentEndYVal);
+		double finalMaxY = Math::Max(activeWaveStartYVal, activeWaveCurrentEndYVal);
+		CalculateAndShowConfirmations(activeWaveStartXVal, finalMaxY, finalMinY, finalMaxY);
+	}
+}
+private: System::Void button_StepDown_Click(System::Object^ sender, System::EventArgs^ e) {
+	if (isSimulating || !activeWaveDefined) return; // Don't allow manual step during simulation
+
+	if (CalculateStepSize()) { // Calculate step size based on current settings
+		activeWaveCurrentEndYVal -= stepSizeAxisUnits;
+		// Optional: Add clamping if needed beyond simulation bounds
+		// Draw and update confirmations
+		DrawFibRetracement(activeWaveStartXVal, activeWaveStartYVal, activeWaveEndXVal, activeWaveCurrentEndYVal);
+		double finalMinY = Math::Min(activeWaveStartYVal, activeWaveCurrentEndYVal);
+		double finalMaxY = Math::Max(activeWaveStartYVal, activeWaveCurrentEndYVal);
+		CalculateAndShowConfirmations(activeWaveStartXVal, finalMaxY, finalMinY, finalMaxY);
+	}
+}
+
+private: System::Void scrollBar_SimPercent_Scroll(System::Object^ sender, System::Windows::Forms::ScrollEventArgs^ e) {
+	// Update labels when scroll bars change
+	label_SimMinPercentValue->Text = scrollBar_SimMinPercent->Value.ToString() + "%";
+	label_SimMaxPercentValue->Text = scrollBar_SimMaxPercent->Value.ToString() + "%";
+	// Ensure Max >= Min
+	if (scrollBar_SimMaxPercent->Value < scrollBar_SimMinPercent->Value) {
+		scrollBar_SimMaxPercent->Value = scrollBar_SimMinPercent->Value;
+		label_SimMaxPercentValue->Text = scrollBar_SimMaxPercent->Value.ToString() + "%";
+	}
+	if (scrollBar_SimMinPercent->Value > scrollBar_SimMaxPercent->Value) {
+		scrollBar_SimMinPercent->Value = scrollBar_SimMaxPercent->Value;
+		label_SimMinPercentValue->Text = scrollBar_SimMinPercent->Value.ToString() + "%";
+	}
+}
+private: System::Void textBox_StepSizePercent_TextChanged(System::Object^ sender, System::EventArgs^ e) {
+	// Optional: Validate input to ensure it's a valid number
+	double stepPercentTest;
+	if (!Double::TryParse(textBox_StepSizePercent->Text, stepPercentTest) || stepPercentTest <= 0) {
+		// Handle invalid input, maybe reset to default or show error tooltip
+		// For now, we parse it inside CalculateStepSize
 	}
 }
 };
